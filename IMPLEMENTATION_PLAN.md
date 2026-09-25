@@ -1,9 +1,9 @@
-# NZ Car Rental Marketplace: Implementation & Design Plan
+# Rento Vroom: Implementation & Design Plan
 
-Working name: **DriveShare NZ** (placeholder until the client confirms the brand; it cannot be the launch name, because "DriveShare" is already used by a US peer-to-peer car rental service, section 16 item 1)
+Website name: **Rento Vroom**, an NZ peer-to-peer car rental marketplace (the name still needs the trade mark, company name and domain checks in section 16, item 1)
 Source: [project_requirements.md](project_requirements.md), the client's *NZ Peer-to-Peer Car Rental Marketplace – Website Specification (Sept 2026)*. It is the source of truth for requirements and is referred to as "spec §N" below.
 Client-facing timeline: [MILESTONES.md](MILESTONES.md) (30-day delivery). Every milestone item and every section of the spec (§1–§32) is mapped to this plan in [section 10](#10-requirements-coverage), and every individual requirement (each bullet and step in the spec) is traced in [Appendix A](#appendix-a-requirement-traceability). Spec items scheduled after launch have a roadmap in [section 10.5](#105-post-launch-roadmap). The spec's questions for the development team (§31) are answered in [section 18](#18-answers-to-the-clients-questions-spec-31).
-Stack: **React + Vite** (TypeScript) for the website, **MongoDB** for all data, and a small **Node.js + Express** API between them (see [section 1](#1-technology-stack)). No Redis, no migration tool, no monorepo tooling. Hosted on **AWS** in Sydney as one Docker container service (see [section 13](#13-deployment-architecture-aws)).
+Stack: **two separate apps, each deployed on its own**: the **frontend** (React + Vite, TypeScript) in the `frontend/` folder and the **backend** (Node.js + Express API, TypeScript) in the `backend/` folder, with **MongoDB** for all data (see [section 1](#1-technology-stack) and [section 2](#2-project-structure--tooling)). Nothing else is deployed: no worker, no shared package, no Redis, no migration tool, no monorepo tooling. Hosted on **AWS** in Sydney: the frontend as static files on S3 + CloudFront, the backend as one Docker container service (see [section 13](#13-deployment-architecture-aws)).
 Design goal: a **professional, luxurious UI** that feels **fast**, with smooth, polished animations and completely original branding (see [section 12](#12-design-implementation))
 
 ---
@@ -14,9 +14,9 @@ Design goal: a **professional, luxurious UI** that feels **fast**, with smooth, 
 
 | Part | Choice | Role |
 |---|---|---|
-| Website | **React 19 + Vite + TypeScript**, React Router | Single-page app. Fast dev server with hot reload and fast production builds. SEO is handled as described in 1.4. |
-| Database | **MongoDB 8 (MongoDB Atlas)** + **Mongoose** | All application data: listings, bookings, payments, messages. Also holds login sessions, the background job queue, rate-limit counters and realtime sync, so **no Redis is needed** (section 4). Built-in geospatial queries for location search, and multi-document transactions for bookings and payments. |
-| API | **Node.js 22 + Express + TypeScript** | The browser cannot connect to MongoDB safely, so a small API keeps the database credentials, Stripe secret keys and business rules on the server. In production the same Express server also serves the React build, so the whole site is **one deployable service**. Future iOS and Android apps reuse the same REST API (spec §26, section 11.1). |
+| Frontend app (`frontend/`) | **React 19 + Vite + TypeScript**, React Router | Single-page app. Fast dev server with hot reload and fast production builds. Deployed on its own as static files (S3 + CloudFront) on `www.<domain>`. It holds no secrets and talks to the backend only through the REST API and Socket.IO. SEO is handled as described in 1.4. |
+| Backend app (`backend/`) | **Node.js 22 + Express + TypeScript** | The browser cannot connect to MongoDB safely, so the API keeps the database credentials, Stripe secret keys and business rules on the server. It also runs Socket.IO and the background job runner in the same process, so it is **one deployable service** (a Docker container) on `api.<domain>`. Future iOS and Android apps reuse the same REST API (spec §26, section 11.1). |
+| Database | **MongoDB 8 (MongoDB Atlas)** + **Mongoose** | All application data: listings, bookings, payments, messages. Also holds login sessions, the background job queue, rate-limit counters and realtime sync, so **no Redis is needed** (section 4). Built-in geospatial queries for location search, and multi-document transactions for bookings and payments. Atlas is a managed service, not something we deploy. |
 
 ### 1.2 Libraries and services
 
@@ -24,8 +24,8 @@ Design goal: a **professional, luxurious UI** that feels **fast**, with smooth, 
 |---|---|---|
 | Styling | **Tailwind CSS** + **shadcn/ui** (Radix primitives) | Accessible building blocks, fully restyled to the luxury brand so nothing looks like a default template |
 | Animation | **Motion** (`motion/react`, formerly Framer Motion) + the browser's **View Transitions API** | Spring physics, gestures, layout and shared-element animations. Native, low-cost page transitions. |
-| Client data | TanStack Query, React Hook Form + Zod | Caching, optimistic UI, validation shared with the API |
-| Background jobs | **MongoDB `jobs` collection** + a job runner inside the API process | Emails, SMS, reminders, booking expiry, payouts, extra charges (section 4) |
+| Frontend data | TanStack Query, React Hook Form + Zod, **openapi-typescript** + **openapi-fetch** | Caching and optimistic UI; form checks for instant feedback; a typed API client generated from the backend's OpenAPI file, so the frontend stays in step with the API without sharing code (section 2.3) |
+| Background jobs | **MongoDB `jobs` collection** + a job runner inside the backend app (no separate worker) | Emails, SMS, reminders, booking expiry, payouts, extra charges (section 4) |
 | Realtime | **Socket.IO** + `@socket.io/mongo-adapter` | Live messaging and in-app notifications, in sync across several API instances through MongoDB |
 | Payments | **Stripe** (Payment Intents + **Stripe Connect Express** + **Radar**) | Supports NZD, Apple Pay and Google Pay. Connect handles Host payouts to NZ bank accounts. Radar screens payments for fraud. |
 | Identity | **Stripe Identity** (ID document + selfie) for Guests and Hosts, with manual review by support staff as fallback | Identity, driver licence and Host identity checks (spec §22) |
@@ -37,50 +37,53 @@ Design goal: a **professional, luxurious UI** that feels **fast**, with smooth, 
 | Monitoring | Sentry + structured logs (Pino) sent to AWS CloudWatch, with CloudWatch alarms | Error monitoring, logging and alerts (spec §25) |
 | Performance | Lighthouse CI + bundle size check in CI, real-user Core Web Vitals in Sentry | The build fails if a page breaks the speed budget (section 12.5) |
 | Analytics | GA4 + Google Search Console | Analytics, conversion tracking and search monitoring (spec §24) |
-| Documents and helpers | `@react-pdf/renderer` (receipt and earnings statement PDFs), `otplib` (staff two-factor codes), `@asteasolutions/zod-to-openapi` (OpenAPI docs from the shared Zod schemas), `libphonenumber-js` (phone numbers) | Receipts (spec §17), secure staff sign-in (spec §25), API docs for the future apps (spec §26) |
+| Documents and helpers | `@react-pdf/renderer` (receipt and earnings statement PDFs), `otplib` (staff two-factor codes), `@asteasolutions/zod-to-openapi` (OpenAPI docs from the backend's Zod schemas), `libphonenumber-js` (phone numbers) | Receipts (spec §17), secure staff sign-in (spec §25), API docs for the future apps (spec §26) |
 | Testing | Vitest, Supertest, mongodb-memory-server, Playwright, **k6** | Unit, API (against an in-memory MongoDB replica set) and end-to-end tests, plus a load test on staging before launch (section 9, Day 26) |
-| CI/CD | GitHub Actions + Dependabot | Lint, typecheck, test and build on every push; builds the Docker image and deploys it to AWS (section 13.3). Dependabot opens pull requests for dependency security updates. |
-| Hosting | **AWS, Sydney** (`ap-southeast-2`): ECS on Fargate, Application Load Balancer, CloudFront + AWS WAF, S3, Route 53, ECR, Secrets Manager, CloudWatch. Defined as code with **AWS CDK** (TypeScript). | One Docker image runs the whole app on managed containers, in the same region as the Atlas cluster (section 13) |
+| CI/CD | GitHub Actions + Dependabot | **One pipeline per app.** A change under `frontend/` runs the frontend checks and deploys the frontend; a change under `backend/` runs the backend checks and deploys the backend (section 13.3). Dependabot opens pull requests for dependency security updates in both folders. |
+| Hosting | **AWS, Sydney** (`ap-southeast-2`). Frontend: S3 + CloudFront. Backend: ECS on Fargate, Application Load Balancer, CloudFront + AWS WAF, ECR, Secrets Manager. Shared by both: Route 53, CloudWatch. Defined as code with **AWS CDK** (TypeScript), one CDK stack inside each app folder. | Exactly two deployments, each with its own stack and pipeline, in the same region as the Atlas cluster (section 13) |
 
 ### 1.3 Deliberately left out
 - **No Redis.** MongoDB covers everything Redis would have done: background jobs, rate limits, Socket.IO sync between instances, and sessions (section 4).
 - **No migration tool.** Mongoose schemas define the structure, indexes are synced from the schemas on deploy, and schema changes are additive (section 3).
-- **No monorepo tooling** (Turborepo, pnpm, Nx). Plain **npm workspaces**, built into npm, share code between the client and the server (section 2).
-- **No separate worker or web server.** Background jobs run inside the API process, and Express serves the website. There is one container image and one ECS service to deploy (section 13).
+- **No shared package and no monorepo tooling** (npm workspaces, Turborepo, pnpm, Nx). The repository has two independent folders, `frontend/` and `backend/`, each with its own `package.json`, lockfile, tests and deploy. They stay in step through the API contract (the backend's OpenAPI file), not through shared code (section 2).
+- **No third deployment.** There is no separate worker, job server, SEO server or shared service. Background jobs and Socket.IO run inside the backend app, and the frontend is static files. **Exactly two things are deployed: the frontend and the backend** (section 13).
 
-### 1.4 SEO with a plain React app
-A Vite React app renders in the browser. Vehicle, city and destination pages must still be indexable and show correct link previews (spec §24), so the Express server does the following:
+### 1.4 SEO with a React single-page app
+The frontend is a React app that renders in the browser and is served as static files. Vehicle, city and destination pages must still be indexable and show correct link previews (spec §24), including in apps that do not run JavaScript when they build a preview (Facebook, WhatsApp, iMessage, LinkedIn, X). This is done without a third deployment:
 
-1. **Server-injected metadata for every public route.** Before sending `index.html`, Express writes a unique page title, meta description, canonical URL, Open Graph tags (social sharing previews) and JSON-LD structured data into it. Static pages use a fixed table in `server/src/seo/pages.ts`: Home, Browse Cars, How It Works, Become a Host, Safety, Insurance / Protection, FAQs, Help, About Us, Contact Us, and the legal pages (Terms & Conditions, Privacy Policy, Cancellation Policy, Host Agreement, Guest Agreement). Vehicle pages (`/cars/:slug`) use the vehicle record. City and destination landing pages (`/rental/:city`) use the `destinations` collection: the 5 launch cities are seeded, and admins can add more destinations without code changes.
-2. **Sitemap and robots.** `sitemap.xml` is generated from the static pages, active vehicles and destinations. `robots.txt` and `noindex` tags keep private areas (account, host, admin, checkout, login, sign-up) out of search results.
-3. **Search Results and empty pages.** Search Results URLs (`/search?…`, one for every mix of place, dates and filters) are `noindex, follow`, so search engines index the clean city, destination and vehicle pages instead of endless filter combinations. A city or destination page with no cars yet still loads normally, with a "No cars here yet" message and a Become a Host prompt, never an empty or error page.
+1. **Static public pages: tags written at build time.** After `vite build`, a small script (`frontend/scripts/prerender-meta.ts`) writes one HTML file for each static public page, each with its own page title, meta description, canonical URL, Open Graph tags (social sharing previews) and JSON-LD structured data, from the table in `frontend/src/seo/pages.ts`: Home, Browse Cars, How It Works, Become a Host, Safety, Insurance / Protection, FAQs, Help, About Us, Contact Us, and the legal pages (Terms & Conditions, Privacy Policy, Cancellation Policy, Host Agreement, Guest Agreement). Login and Sign Up get their own files too, marked `noindex`. A CloudFront Function (a few lines of JavaScript, part of the frontend's CDK stack) maps each page URL to its HTML file, and every other app URL (account, host, admin, checkout) to `index.html`.
+2. **Vehicle and destination pages: tags from the backend.** Vehicle pages (`/cars/:slug`) and city and destination landing pages (`/rental/:city`) change with the data, so the frontend's CloudFront sends these page requests to the backend's `/pages` route. The backend takes the frontend's current `index.html` (fetched from `www.<domain>` and cached for 60 s, so it always matches the latest frontend release), writes the tags from the vehicle record or the `destinations` collection into it, and returns it. CloudFront caches the result for 60 s. The page then loads the same React app as every other page. An unknown or inactive car returns a real 404 status. The 5 launch cities are seeded, and admins can add more destinations without code changes. If the backend cannot answer, CloudFront serves the plain `index.html` instead, so the page still opens.
+3. **While the app runs,** React 19 updates the page title, description and canonical tag as the visitor moves between pages, so browser tabs, history and Google's rendered view always show the current page.
+4. **Sitemap and robots.** `sitemap.xml` is generated by the backend from the static pages, active vehicles and destinations, and served on `www.<domain>/sitemap.xml` through the same CloudFront route. `robots.txt` is a static file in the frontend. `robots.txt` and `noindex` tags keep private areas (account, host, admin, checkout, login, sign-up) out of search results.
+5. **Search Results and empty pages.** Search Results URLs (`/search?…`, one for every mix of place, dates and filters) are `noindex, follow`, so search engines index the clean city, destination and vehicle pages instead of endless filter combinations. A city or destination page with no cars yet still loads normally, with a "No cars here yet" message and a Become a Host prompt, never an empty or error page.
 
-Google renders JavaScript, so the page body (specs, reviews) is indexed after rendering. Indexing is monitored in Search Console from launch. If coverage is poor, a prerendering service (e.g. Prerender.io) can be added for crawlers without changing the app.
+Google renders JavaScript, so the page body (specs, reviews) is indexed after rendering. Indexing is monitored in Search Console from launch. If coverage is poor, a prerendering service (e.g. Prerender.io) can be added for crawlers without changing either app.
 
 ---
 
 ## 2. Project Structure & Tooling
 
-The whole product lives in **one Git repository** with three folders: `client` (the React app), `server` (the Express API) and `shared` (code both of them use). They are **npm workspaces**, so one `npm install` sets up everything, there is one lockfile, and the client and server import `shared` like a normal package. Because the Zod schemas, types and pricing live in `shared`, the website and the API cannot drift apart: if a shared schema change breaks either side, the typecheck fails in the same pull request.
+The product lives in **one Git repository** with **two independent apps in two folders**: `frontend/` (the React website) and `backend/` (the Node.js API). Each folder is a complete project with its own `package.json`, lockfile, `node_modules`, TypeScript and lint settings, tests, `.env.example`, CDK stack and deploy pipeline. Neither app imports code from the other, and each one is built, tested and deployed on its own. The only link between them is the API: the backend publishes its contract as an OpenAPI file, and the frontend generates its API types from that file (2.3).
 
 ### 2.1 Tooling
 
 | Concern | Choice | Why |
 |---|---|---|
-| Packages | **npm workspaces** (`client`, `server`, `shared`) | Built into npm, no extra tools. One lockfile, and `shared` is linked into both apps. |
-| TypeScript | Strict mode. One `tsconfig.base.json` at the root, extended by each folder | The same compiler rules everywhere |
-| Website build | **Vite** | Dev server with hot reload; proxies `/api` and `/socket.io` to Express so the browser talks to one origin and auth cookies work without CORS setup |
-| Server dev and build | `tsx watch` in development, **tsup** for production | tsup bundles the server, its `seed` and `sync-indexes` scripts, and the `shared` code they use into `server/dist` (`noExternal: ['@driveshare/shared']`), so production runs plain `node` without `tsx` |
-| Production image | Multi-stage **Dockerfile** at the root | The same image runs on staging, on production and on a developer's machine (section 13.2) |
-| Lint and format | One ESLint flat config + Prettier at the root | Includes a rule that stops `client` from importing anything in `server` |
-| Node version | Node 22 LTS, pinned in `.nvmrc` and `engines` | The same runtime locally, in CI and in production |
-| Local database | MongoDB 8 in `docker-compose.yml`, run as a **single-node replica set** | Transactions need a replica set. Without Docker, `npm run db:dev` starts one in memory with mongodb-memory-server. |
+| Packages | Plain **npm** in each folder, one lockfile per app | No workspaces and no monorepo tools. `npm install` in `frontend/` sets up only the frontend, and the same for `backend/`. |
+| TypeScript | Strict mode, with its own `tsconfig.json` in each app | The same compiler rules in both apps, with no settings shared across folders |
+| Frontend build | **Vite** | Dev server with hot reload and fast production builds. `VITE_API_URL` points the website at the backend (`http://localhost:4000` locally, `https://api.<domain>` on AWS), in development exactly as in production. |
+| Frontend release | `npm run build` → static files in `frontend/dist`, uploaded to S3 | No server and no container for the frontend (section 13.2) |
+| Backend dev and build | `tsx watch` in development, **tsup** for production | tsup bundles the server and its `seed` and `sync-indexes` scripts into `backend/dist`, so production runs plain `node` without `tsx` |
+| Backend image | Multi-stage **Dockerfile** in `backend/` | The same image runs on staging, on production and on a developer's machine (section 13.2) |
+| Lint and format | ESLint flat config + Prettier in each app, with the same rules | Each app is checked on its own, in its own pipeline |
+| Node version | Node 22 LTS, pinned in `.nvmrc` and `engines` in both apps | The same runtime locally, in CI and in production |
+| Local database | MongoDB 8 in `backend/docker-compose.yml`, run as a **single-node replica set** | Transactions need a replica set. Without Docker, `npm run db:dev` in `backend/` starts one in memory with mongodb-memory-server. |
 
 ### 2.2 Layout
 
 ```
-driveshare/
-├── client/                        # @driveshare/client: React + Vite single-page app
+rento-vroom/
+├── frontend/                      # APP 1: React + Vite website, deployed as static files (S3 + CloudFront)
 │   ├── src/
 │   │   ├── routes/
 │   │   │   ├── public/            # home, cars (Browse Cars), search, cars/:slug, how-it-works,
@@ -95,125 +98,150 @@ driveshare/
 │   │   ├── components/ui/         # design system: restyled shadcn/ui components + motion building blocks
 │   │   ├── features/              # booking/, vehicle/, search/, dashboard/, messaging/, inspection/,
 │   │   │                          # support/: marketplace components and hooks
-│   │   ├── lib/                   # API client, auth, TanStack Query client, Socket.IO client
+│   │   ├── api/                   # schema.d.ts (generated from backend/openapi.json) + typed API client
+│   │   ├── lib/                   # auth, TanStack Query client, Socket.IO client, NZD, date and NZ address formatters
+│   │   ├── seo/                   # pages.ts: title, description, Open Graph and JSON-LD for each static page (1.4)
+│   │   ├── styles/                # tokens.ts: design tokens → CSS variables + Tailwind theme (12.2)
 │   │   ├── router.tsx             # route tree, lazy-loaded routes, role guards
 │   │   └── main.tsx
+│   ├── public/                    # robots.txt, favicons, web app manifest
+│   ├── scripts/                   # prerender-meta.ts: one HTML file per static public page (1.4)
+│   ├── e2e/                       # Playwright end-to-end tests (run against a local or staging backend)
+│   ├── infra/                     # CDK stack: S3 bucket, CloudFront distribution + function, certificate, DNS
+│   │                              # records. Own package.json, so installing the app never downloads the CDK.
 │   ├── index.html
-│   └── vite.config.ts             # dev proxy for /api and /socket.io
-├── server/                        # @driveshare/server: Express REST API + Socket.IO + job runner
+│   ├── vite.config.ts
+│   ├── .env.example               # public VITE_ values only (2.5)
+│   └── package.json               # rento-vroom-frontend
+├── backend/                       # APP 2: Node.js + Express REST API + Socket.IO + job runner, one Docker container
 │   ├── src/
-│   │   ├── modules/               # auth, users, hosts, vehicles, search, availability, bookings, payments,
+│   │   ├── modules/               # auth, users, hosts, vehicles, search, availability, pricing, bookings, payments,
 │   │   │                          # payouts, messages, reviews, inspections, incidents, verification,
 │   │   │                          # notifications, support, help, moderation, risk, admin, cms.
-│   │   │                          # Each has model.ts, service.ts, routes.ts
+│   │   │                          # Each has model.ts, schemas.ts (Zod), service.ts, routes.ts
 │   │   ├── jobs/                  # MongoDB job queue: queue.ts, runner.ts, one handler per job type
-│   │   ├── emails/                # React Email templates
+│   │   ├── emails/                # React Email templates + theme.ts (brand colours and fonts from 12.2)
 │   │   ├── integrations/          # Stripe, mailer (Resend / console), Twilio, Cloudinary, Google Places, logger
-│   │   ├── middleware/            # auth, roles and permissions, rate limits, error handler, audit log
+│   │   ├── middleware/            # auth, roles and permissions, CORS, rate limits, error handler, audit log
 │   │   ├── realtime/              # Socket.IO server + MongoDB adapter
-│   │   ├── seo/                   # meta tag injection, sitemap.xml, robots.txt
+│   │   ├── pages/                 # page tags for vehicle and destination pages, sitemap.xml (1.4)
+│   │   ├── lib/                   # NZD, date and NZ address formatters (emails, PDFs, SMS)
 │   │   ├── db.ts                  # Mongoose connection + transaction helper
 │   │   ├── env.ts                 # environment variables, validated with Zod at startup
-│   │   └── server.ts              # /api/v1, Socket.IO, /healthz, graceful shutdown, and the client build in production
-│   ├── scripts/                   # seed.ts, sync-indexes.ts
-│   └── test/
-├── shared/                        # @driveshare/shared: Zod schemas (API contracts), types, enums, pricing,
-│                                  # cancellation policy, design tokens, NZD, date and NZ address formatters.
-│                                  # Runs in the browser and in Node.
-├── e2e/                           # Playwright tests against the client + API
-├── infra/                         # AWS CDK app (TypeScript): VPC, load balancer, ECS, CloudFront, WAF, S3, ECR,
-│                                  # secrets, alarms. Own package.json, not an npm workspace, so app installs and
-│                                  # image builds never download the CDK.
-├── .github/workflows/             # ci.yml (checks on every push), deploy.yml (staging and production, section 13.3)
-├── Dockerfile                     # production image (section 13.2)
-├── .dockerignore
-├── docker-compose.yml             # local MongoDB (single-node replica set)
-├── package.json                   # npm workspaces + root scripts
-├── tsconfig.base.json
-└── .nvmrc
+│   │   └── server.ts              # /api/v1, /pages, Socket.IO, /healthz, graceful shutdown
+│   ├── scripts/                   # seed.ts, sync-indexes.ts, openapi.ts
+│   ├── test/
+│   ├── infra/                     # CDK stack: VPC, load balancer, ECS, ECR, CloudFront + WAF, secrets, alarms.
+│   │                              # Own package.json, so image builds never download the CDK.
+│   ├── openapi.json               # the API contract, generated from the Zod schemas (committed)
+│   ├── Dockerfile                 # production image (section 13.2)
+│   ├── .dockerignore
+│   ├── docker-compose.yml         # local MongoDB (single-node replica set)
+│   ├── .env.example
+│   └── package.json               # rento-vroom-backend
+├── .github/workflows/             # frontend.yml and backend.yml: one pipeline per app (section 13.3). GitHub only
+│                                  # reads workflows from the repository root, so this is the one shared folder.
+├── README.md                      # how to run the two apps locally
+└── IMPLEMENTATION_PLAN.md, MILESTONES.md, project_requirements.md
 ```
 
-### 2.3 How the parts connect
+### 2.3 How the two apps connect
 
 ```
-client  → shared
-server  → shared
-shared  → zod only (no Node built-ins, no DOM, no Mongoose)
+Browser ─▶ www.<domain>  (frontend: static files from S3 through CloudFront)
+Browser ─▶ api.<domain>  (backend: REST /api/v1 with auth cookies, and Socket.IO)
+www.<domain>/cars/*, /rental/*, /sitemap.xml ─▶ backend /pages   (page tags, 1.4)
+backend ─▶ MongoDB Atlas, Stripe, Resend, Twilio, Cloudinary, Google Places, Sentry
 ```
 
-- **The client never imports from `server`.** An ESLint rule blocks it, and `client` does not list `server` as a dependency, so Mongoose, Stripe secret keys and other server code cannot reach the browser bundle.
-- **`shared` runs anywhere.** Only Zod, types and pure functions, so the future native apps (spec §26) can use it unchanged.
-- **One request path in the API:** `routes.ts` (input checked with the Zod schemas from `shared`) → `service.ts` (business rules, unit tested) → `model.ts` (Mongoose). Background job handlers call the same services, so a request-to-book that expires in a job follows exactly the same rules as one the Host declines in the dashboard.
-- **`shared` has no build step.** Its `exports` point straight at the TypeScript source, and Vite (client), `tsx` (server in development) and tsup (server build) compile it. A change in `shared` shows up immediately in `npm run dev`.
-- **Design tokens are defined once** in `shared/src/tokens.ts`. They generate the CSS variables and Tailwind theme for the client (12.2) and are imported by the email templates, so emails match the site exactly.
+- **No shared code.** The frontend never imports from `backend/`, and the backend never imports from `frontend/`. Mongoose, Stripe secret keys and other server code cannot reach the browser bundle, because they are in a different project.
+- **The API contract is the link.** The input and output of every route is a Zod schema in the backend (`schemas.ts` in each module). `npm run openapi` in `backend/` writes `backend/openapi.json`, and `npm run api:types` in `frontend/` turns that file into TypeScript types (`openapi-typescript`) for a typed API client (`openapi-fetch`). Both generated files are committed, so each app builds on its own. CI fails if either file is out of date, so an API change that would break the website fails the frontend typecheck in the same pull request.
+- **The backend owns every business rule.** Pricing, availability, cancellation fees, eligibility and permissions are calculated only in the backend. The frontend never calculates a price: it shows the amounts the API returns (estimated totals in search results, `/quote` on the listing page and at checkout, `cancellation-preview` before a cancellation).
+- **Validation:** the backend's Zod schemas are the real check (section 3). Frontend forms repeat only the simple checks (required fields, formats, lengths) for instant feedback, and show the field errors the API returns (`{ error: { code, message, fields } }`) for everything else.
+- **One request path in the backend:** `routes.ts` (input checked with the module's Zod schemas) → `service.ts` (business rules, unit tested) → `model.ts` (Mongoose). Background job handlers call the same services, so a request-to-book that expires in a job follows exactly the same rules as one the Host declines in the dashboard.
+- **Two small, deliberate copies.** The NZ formatters (NZD, dates and times in NZ time, NZ addresses) exist in both apps (`frontend/src/lib` for the website, `backend/src/lib` for emails, PDFs and SMS), each unit-tested against the same list of examples. The brand colours and fonts the emails need are copied from the design tokens (12.2) into `backend/src/emails/theme.ts`.
+- **Two subdomains, one site.** The website on `www.<domain>` calls the API on `api.<domain>`. The backend accepts requests only from the frontend's own origin for each environment (CORS with credentials, from `FRONTEND_ORIGINS`), its auth cookies are `httpOnly`, `Secure` and `SameSite=Lax` (the two subdomains count as the same site, so the browser sends the cookies), and Socket.IO uses the same origin list (sections 6.1 and 14). Local development works the same way, with `localhost:5173` calling `localhost:4000`.
 
 ```jsonc
-// package.json (root)
+// frontend/package.json
 {
-  "name": "driveshare",
+  "name": "rento-vroom-frontend",
   "private": true,
-  "workspaces": ["client", "server", "shared"],
+  "type": "module",
   "scripts": {
-    "dev": "concurrently -n client,server \"npm run dev -w client\" \"npm run dev -w server\"",
-    "build": "npm run build -w client && npm run build -w server",
-    "start": "node server/dist/server.js",
+    "dev": "vite",
+    "build": "tsc -b && vite build && tsx scripts/prerender-meta.ts",
+    "preview": "vite preview",
     "lint": "eslint .",
-    "typecheck": "npm run typecheck --workspaces --if-present",
-    "test": "npm test --workspaces --if-present",
+    "typecheck": "tsc -b",
+    "test": "vitest run",
     "e2e": "playwright test",
-    "seed": "npm run seed -w server",
-    "db:indexes": "npm run db:indexes -w server"
+    "api:types": "openapi-typescript ../backend/openapi.json -o src/api/schema.d.ts"
   }
 }
 
-// shared/package.json
+// backend/package.json
 {
-  "name": "@driveshare/shared",
+  "name": "rento-vroom-backend",
   "private": true,
   "type": "module",
-  "exports": {
-    ".": "./src/index.ts",
-    "./pricing": "./src/pricing.ts",
-    "./tokens": "./src/tokens.ts"
-  },
-  "dependencies": { "zod": "^4.0.0" }
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsup",
+    "start": "node dist/server.js",
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "openapi": "tsx scripts/openapi.ts",
+    "seed": "tsx scripts/seed.ts",
+    "db:indexes": "tsx scripts/sync-indexes.ts",
+    "db:dev": "tsx scripts/dev-db.ts",
+    "email:dev": "email dev --dir src/emails"
+  }
 }
 ```
 
-`client` and `server` list `"@driveshare/shared": "*"` in their dependencies, and npm links the local folder.
+On AWS, the seed and the index sync run from the built image as one-off tasks (`node dist/seed.js`, `node dist/sync-indexes.js`, section 13.3).
 
 ### 2.4 Daily workflow
 
 ```bash
-npm install                  # client, server and shared, one lockfile
+# Terminal 1: backend
+cd backend
+npm install
 docker compose up -d         # MongoDB (single-node replica set); or: npm run db:dev (no Docker)
 npm run seed                 # NZ cities, airports, destinations, 20 demo vehicles, test users, FAQs, help articles
-npm run dev                  # client :5173 (Vite), server :4000 (API, Socket.IO, job runner)
+npm run dev                  # API, Socket.IO and job runner on :4000
+
+# Terminal 2: frontend
+cd frontend
+npm install
+npm run dev                  # website on :5173, calling the backend on :4000
 ```
 
-| Command | What it does |
-|---|---|
-| `npm run dev -w client` | Starts only the React app |
-| `npm test -w server` | Runs the server tests (API and services against an in-memory replica set) |
-| `npm run lint && npm run typecheck && npm test` | All checks, the same as CI |
-| `npm run e2e` | Playwright end-to-end tests |
-| `npm run email:dev -w server` | Previews every email template in the browser |
-| `npm run db:indexes` | Creates or updates the MongoDB indexes from the Mongoose schemas |
-| `docker build -t driveshare .` | Builds the production image locally, the same one deployed to AWS |
-| `npx cdk diff -c env=staging` (in `infra/`) | Shows what a CDK update would change in AWS, before `cdk deploy` applies it |
-| `npm install stripe -w server` | Adds a dependency to one workspace |
+| Command | Run in | What it does |
+|---|---|---|
+| `npm run lint && npm run typecheck && npm test` | each app | All checks for that app, the same as its pipeline |
+| `npm run openapi` | `backend/` | Updates `openapi.json` after an API change |
+| `npm run api:types` | `frontend/` | Regenerates the API types from `../backend/openapi.json` |
+| `npm run e2e` | `frontend/` | Playwright end-to-end tests (the backend must be running) |
+| `npm run email:dev` | `backend/` | Previews every email template in the browser |
+| `npm run db:indexes` | `backend/` | Creates or updates the MongoDB indexes from the Mongoose schemas |
+| `docker build -t rento-vroom-backend .` | `backend/` | Builds the backend's production image locally, the same one deployed to AWS |
+| `npm run build && npm run preview` | `frontend/` | Builds the production website and serves it locally |
+| `npx cdk diff -c env=staging` | `frontend/infra/` or `backend/infra/` | Shows what a CDK update would change in AWS for that app, before `cdk deploy` applies it |
 
 ### 2.5 Environment variables
 
-- `server/.env.example` and `client/.env.example` are committed; `.env` files are ignored. At startup the server checks its variables against a Zod schema in `src/env.ts` and exits with a clear message if one is missing or invalid.
-- Only `VITE_`-prefixed variables reach the browser bundle. Secrets are never given that prefix.
-- On AWS, the staging and production values are kept in **AWS Secrets Manager** (one secret per environment) and passed to the container as environment variables when it starts, so `env.ts` checks them the same way. Nothing secret is built into the Docker image.
+- Each app commits its own `.env.example`; `.env` files are ignored.
+- **Backend:** at startup it checks its variables against a Zod schema in `src/env.ts` and exits with a clear message if one is missing or invalid. Besides the database and provider keys, it has `FRONTEND_URL` (for links in emails and page tags) and `FRONTEND_ORIGINS` (the CORS list, e.g. `https://www.<domain>`). On AWS, the staging and production values are kept in **AWS Secrets Manager** (one secret per environment) and passed to the container as environment variables when it starts, so `env.ts` checks them the same way. Nothing secret is built into the Docker image.
+- **Frontend:** public values only, all prefixed `VITE_` and built into the bundle: `VITE_API_URL`, the Stripe publishable key, the Google Maps browser key (restricted to the site's domains), the Sentry DSN and the GA4 ID. The frontend has no secrets. Each environment's values are set in the frontend pipeline at build time, so staging and production are separate builds.
 
 ---
 
 ## 3. Data Model (MongoDB collections)
 
-Each collection's Mongoose model lives in its module, for example `server/src/modules/vehicles/vehicle.model.ts`.
+Each collection's Mongoose model lives in its backend module, for example `backend/src/modules/vehicles/vehicle.model.ts`.
 
 **Embed or reference:** data that is always read with its parent and stays small (photos, documents, delivery options, line items, refunds, inspection photos, incident events, ticket messages) is embedded. Data that grows without limit or is queried on its own (bookings, messages, availability blocks, reviews, notifications, audit logs, jobs) gets its own collection.
 
@@ -266,7 +294,7 @@ vehicles           _id, hostId, slug (unique), regoPlate, vin?, chassisNo? (NZ i
                    └─ maintenanceReminders[] { title, dueAt?, dueOdometer?, notes, doneAt }
 availabilityBlocks vehicleId, startAt, endAt, reason (BOOKED|HOLD|HOST_BLOCK|RECURRING|BUFFER|ADMIN), bookingId?,
                    expiresAt? (HOLD only: dates held during checkout or while a request waits for the Host, 8.2)
-bookings           _id, ref (DS-XXXXXX, unique), vehicleId, guestId, hostId, startAt, endAt,
+bookings           _id, ref (RV-XXXXXX, unique), vehicleId, guestId, hostId, startAt, endAt,
                    pickupOptionId, pickupAddress?, returnOptionId, returnAddress?,
                    protectionPlan { code, name, priceCents, excessCents, coverSummary, mandatory } (copy),
                    status (PAYMENT_PENDING|PENDING|CONFIRMED|ACTIVE|COMPLETED|CANCELLED|DECLINED|EXPIRED)
@@ -277,7 +305,8 @@ bookings           _id, ref (DS-XXXXXX, unique), vehicleId, guestId, hostId, sta
                            hostPayoutCents, platformFeeCents },
                    cancellationPolicy, cancelledBy, cancelledAt, cancellationReason (incl. GUEST_NO_SHOW|
                    HOST_NO_SHOW|PLATFORM), cancellationFeeCents
-                   ├─ lineItems[]     { code, label, amountCents, mandatory }
+                   ├─ lineItems[]     { code, label, amountCents, gstCents, mandatory }   (GST kept for each line,
+                   │                                                                   section 5)
                    ├─ statusHistory[] { status, at, by, reason }   (every status change, incl. admin edits)
                    └─ extraCharges[]  { type (EXTRA_KM|FUEL|CLEANING|LATE_RETURN|DAMAGE|TOLL|FINE|OTHER),
                                         description, amountCents, incidentId?, addedBy, paymentId, status }
@@ -286,19 +315,26 @@ payments           bookingId, type (BOOKING|EXTRA_CHARGE), stripePaymentIntentId
                    ├─ refunds[] { amountCents, reason, issuedBy, fundedBy (PLATFORM|HOST), stripeRefundId,
                    │              createdAt }
                    └─ dispute?  { stripeDisputeId, reason, status, dueBy }       (card chargebacks)
-payouts            hostId, bookingId, amountCents, stripeTransferId, status (SCHEDULED|HELD|PAID|FAILED),
+payouts            hostId, bookingId, type (TRIP|CANCELLATION_FEE|EXTRA_CHARGE; a booking can have one TRIP or
+                   CANCELLATION_FEE payout, then one EXTRA_CHARGE payout per extra charge that succeeds), extraChargeId?,
+                   amountCents, stripeTransferId, status (SCHEDULED|HELD|PAID|FAILED),
                    holdReason? (INCIDENT|DISPUTE|PAYOUT_SETUP|TRIP_NOT_STARTED|SUSPENDED), scheduledFor, paidAt
                    └─ deductions[] { type (HOST_CANCELLATION_FEE|HOST_FUNDED_REFUND|OTHER), bookingId, amountCents }
 threads            bookingId (unique), participantIds[], lastMessageAt
 messages           threadId, senderId, body, attachments[], systemGenerated, readAt, createdAt
-reviews            bookingId, authorId, subjectId, direction (GUEST_TO_HOST|HOST_TO_GUEST), overall,
+reviews            bookingId, vehicleId (Guest → Host reviews: shown on the listing and counted in the car's rating),
+                   authorId, subjectId, direction (GUEST_TO_HOST|HOST_TO_GUEST), overall,
                    communication, pickupReturn, cleanliness (Guest → Host: vehicle cleanliness and condition),
-                   care (Host → Guest: vehicle care and Guest behaviour), body, status (PUBLISHED|PENDING|HIDDEN),
-                   revealAt (when both sides have reviewed or the review window closes), moderation { reason, by, at }
+                   care (Host → Guest: vehicle care and Guest behaviour), body,
+                   status (AWAITING_REVEAL|PUBLISHED|HIDDEN), revealAt (when both sides have reviewed or the review
+                   window closes), moderation { state (CLEAR|HELD|HIDDEN), reason, by, at }   (a held review is not
+                   published by the reveal job until a moderator clears it)
 conditionReports   bookingId, stage (CHECK_IN|CHECK_OUT), odometer, fuelOrBatteryPct, notes,
-                   damagePins[] { x, y, note, isNew }, confirmedByGuestAt, confirmedByHostAt
+                   damagePins[] { x, y, note, isNew, flaggedBy }, confirmedByGuestAt, confirmedByHostAt,
+                   completedBy? (support staff member who completed a trip with a missing check-out, section 8.2)
                    └─ photos[] { angle (FRONT|REAR|DRIVER_SIDE|PASSENGER_SIDE|WHEELS|WINDSCREEN|INTERIOR|
-                                 DASHBOARD|DAMAGE), url, takenAt, exifTakenAt, lat, lng }
+                                 DASHBOARD|DAMAGE), url, takenBy (Guest, Host or staff user), takenAt (device
+                                 clock in the capture flow), exifTakenAt, uploadedAt (server time), lat, lng }
 incidents          caseRef (unique, e.g. IN-XXXXXX), bookingId, reporterId, type (DAMAGE|ACCIDENT|THEFT|BREAKDOWN|CLEANING|
                    FUEL|LATE_RETURN|NO_SHOW|TOLL|FINE|DISPUTE|OTHER), description,
                    status (OPEN|INVESTIGATING|AWAITING_RESPONSE|RESOLVED|CLOSED), assignedTo
@@ -320,7 +356,12 @@ stripeEvents       eventId (unique), type, processedAt   (webhook idempotency)
 faqs               question, answer, category, audience (GUEST|HOST|ALL), showOnHome, order
 cmsBlocks          key (unique), content, version   (homepage hero and sections, featured vehicles, footer links
                    incl. social links, legal pages in Markdown)
-destinations       slug (unique), city, region, intro, heroImage, location, airports[], featured, order
+places             type (CITY|SUBURB|AIRPORT|DESTINATION), name, region, code? (IATA code for airports, e.g. AKL),
+                   location (Point), parentId? (the city a suburb or airport belongs to), popularity
+                   (our own place list for autocomplete, airport search and airport delivery options, seeded from NZ
+                   data; Google Places fills in street addresses)
+destinations       slug (unique), city, region, intro, heroImage, location, airports[] (airport codes from `places`),
+                   featured, order
                    (landing pages; featured destinations are the homepage tiles)
 platformSettings   one document: fees, GST rate, cancellation tiers (and which ones Hosts may choose), Host
                    cancellation fee, Guest cancellation fee share, protection plans, driver eligibility rules,
@@ -335,15 +376,16 @@ Two libraries also keep small collections of their own in the same database: the
 **Key indexes**
 - `vehicles`: `{ location: "2dsphere", status: 1 }`, `{ slug: 1 }` unique, `{ hostId: 1 }`, `{ make: 1, model: 1 }`
 - `availabilityBlocks`: `{ vehicleId: 1, startAt: 1, endAt: 1 }`
-- `bookings`: `{ ref: 1 }` unique, `{ guestId: 1, startAt: -1 }`, `{ hostId: 1, status: 1, startAt: -1 }`
+- `bookings`: `{ ref: 1 }` unique, `{ guestId: 1, startAt: -1 }`, `{ hostId: 1, status: 1, startAt: -1 }`, `{ vehicleId: 1, status: 1, startAt: 1 }` (a car's upcoming bookings, for deactivation and suspension)
+- `places`: `{ location: "2dsphere" }`, `{ type: 1, code: 1 }`, `{ name: 1 }` (prefix search for autocomplete)
 - `messages`: `{ threadId: 1, createdAt: 1 }`
 - `sessions`: `{ expiresAt: 1 }` with `expireAfterSeconds: 0`
 - `jobs`: `{ status: 1, runAt: 1 }`, `{ uniqueKey: 1 }` unique (only where set), `{ refId: 1 }`, `{ finishedAt: 1 }` with a 30-day TTL
 - `notifications`: `{ userId: 1, readAt: 1, createdAt: -1 }`
 - `supportTickets`: `{ ref: 1 }` unique, `{ status: 1, updatedAt: -1 }`; `reports`: `{ status: 1, createdAt: -1 }`
 - `users`: `{ email: 1 }` unique, `{ "driverLicence.numberHash": 1 }`, `{ "hostProfile.status": 1 }` (Host application queue)
-- `reviews`: `{ bookingId: 1, direction: 1 }` unique (one review each way per trip), `{ subjectId: 1, status: 1, createdAt: -1 }`
-- `payments`: `{ stripePaymentIntentId: 1 }` unique, `{ bookingId: 1 }`, `{ status: 1, createdAt: -1 }`; `payouts`: `{ hostId: 1, status: 1, scheduledFor: -1 }`, `{ bookingId: 1 }`
+- `reviews`: `{ bookingId: 1, direction: 1 }` unique (one review each way per trip), `{ subjectId: 1, status: 1, createdAt: -1 }`, `{ vehicleId: 1, status: 1, createdAt: -1 }` (listing reviews)
+- `payments`: `{ stripePaymentIntentId: 1 }` unique, `{ bookingId: 1 }`, `{ status: 1, createdAt: -1 }`; `payouts`: `{ hostId: 1, status: 1, scheduledFor: -1 }`, `{ bookingId: 1, type: 1, extraChargeId: 1 }` unique (one payout per booking and charge)
 - `conditionReports`: `{ bookingId: 1, stage: 1 }` unique; `incidents`: `{ caseRef: 1 }` unique, `{ bookingId: 1 }`, `{ status: 1, updatedAt: -1 }`
 - `threads`: `{ bookingId: 1 }` unique, `{ participantIds: 1, lastMessageAt: -1 }`; `stripeEvents`: `{ eventId: 1 }` unique
 - `auditLogs`: `{ entity: 1, entityId: 1, createdAt: -1 }`, `{ actorId: 1, createdAt: -1 }`; `destinations` and `helpArticles`: `{ slug: 1 }` unique
@@ -370,10 +412,10 @@ Two libraries also keep small collections of their own in the same database: the
 - **Audit trails are append-only (spec §15, §25):** the app has no code path that edits or deletes `auditLogs` entries or incident `events`. Only the retention job removes entries past their retention period (section 14).
 - **Same person, several accounts (spec §22):** a licence number is compared through its keyed hash when it is saved. A licence already on another account raises a risk flag for admins rather than an error, so support can merge a genuine re-registration.
 - **Changes to live listings (listing moderation, spec §22):** changes to price, discounts, availability, trip rules and delivery options apply immediately. New photos and documents stay `PENDING` until support staff approve them; meanwhile the listing stays live with the photos and documents already approved. Changing the rego, VIN or chassis number, make, model or year sends the listing back to `UNDER_REVIEW`, and it is hidden from search until it is approved again.
-- **Recurring availability:** a Host's recurring rules (e.g. "unavailable every weekday 8am–6pm") are expanded into `RECURRING` blocks for the next 12 months whenever the rules change, and topped up monthly. Search, quotes and bookings then use the same single overlap check.
+- **Recurring availability:** a Host's recurring rules (e.g. "unavailable every weekday 8am–6pm") are expanded into `RECURRING` blocks for the next 12 months whenever the rules change, and topped up monthly. Search, quotes and bookings then use the same single overlap check. A new rule never overrides an existing booking or hold: the expansion skips any range that overlaps one, and the Host is shown which dates were skipped.
 - **Double-booking prevention.** MongoDB has no range-overlap constraint, so every calendar write (bookings, Host blocks, recurring blocks, admin overrides) goes through one function that runs inside a transaction:
   ```ts
-  // server/src/modules/availability/availability.service.ts: the only code path that writes availabilityBlocks
+  // backend/src/modules/availability/availability.service.ts: the only code path that writes availabilityBlocks
   await mongoose.connection.transaction(async (session) => {
     // 1. Write to the vehicle document first. Two bookings for the same car now conflict,
     //    and MongoDB aborts one and retries it automatically.
@@ -387,9 +429,9 @@ Two libraries also keep small collections of their own in the same database: the
     ...
   });
   ```
-  When the second booking is retried, it sees the first booking's block and returns `409 Conflict`. Transactions need a replica set: Atlas provides one, and docker-compose runs MongoDB locally as a single-node replica set. An automated test sends 20 simultaneous bookings for one car and checks that exactly one succeeds. An admin override (block or unblock dates) uses the same function and is written to the audit log. The `HOLD` blocks written when checkout starts (section 8.2) also go through this function, so held dates can't be double-booked either.
+  When the second booking is retried, it sees the first booking's block and returns `409 Conflict`. Transactions need a replica set: Atlas provides one, and docker-compose runs MongoDB locally as a single-node replica set. An automated test sends 20 simultaneous bookings for one car and checks that exactly one succeeds. An admin override (block or unblock dates) uses the same function and is written to the audit log. The `HOLD` blocks written when a signed-in Guest's booking is created (section 8.2) also go through this function, so held dates can't be double-booked either.
 
-**Validation rules** (Zod schemas in `shared`, so the website and the API check exactly the same things)
+**Validation rules** (Zod schemas in the backend, which is the real check; the frontend repeats the simple format checks for instant feedback and shows the API's field errors for the rest, section 2.3)
 - **Vehicle:** a number plate of 1–6 letters and numbers (stored in capitals without spaces) that is not on another active listing; a 17-character VIN (no I, O or Q) or, for an import without one, a chassis number; a year that is not in the future (next year's models allowed); seats, doors, prices and discounts within the limits in `platformSettings`, with minimum days no more than maximum days; WOF (or CoF) and rego expiry dates in the future when the listing is submitted; every required photo angle and document present before it can be submitted. The registered owner on the rego document is the Host, or the Host uploads the owner's written consent (`OWNER_CONSENT`); support staff check this during document review.
 - **Search:** a pick-up time that is not in the past and a return after it; a trip length within the maximum in settings; a radius within the range in settings; price and year ranges with the minimum no higher than the maximum; a minimum rating of 1–5. Unknown filter values are ignored instead of failing the search. A search with no place covers all of NZ.
 - **Booking:** a start time in the future and at least the listing's minimum notice away; an end time after the start; a length within the listing's minimum and maximum days; pickup and return options that belong to the car, with delivery addresses inside the option's radius; no overlap with any block, including the buffer; WOF (or CoF) and rego valid until the trip ends. The Guest meets the eligibility rules in settings (age, licence class, years held), holds a licence that is valid until the trip ends, is not suspended, is not the car's Host, and has not been blocked by the Host.
@@ -408,7 +450,7 @@ Two libraries also keep small collections of their own in the same database: the
 
 | Need | How it works |
 |---|---|
-| Background jobs (emails, SMS, reminders, expiries, payouts, extra charges) | `jobs` collection + a job runner inside the API process (4.2) |
+| Background jobs (emails, SMS, reminders, expiries, payouts, extra charges) | `jobs` collection + a job runner inside the backend app (4.2) |
 | Live messaging and notifications across several server instances | Socket.IO with `@socket.io/mongo-adapter` (4.4) |
 | Rate limiting (login, sign-up, OTP, password reset, contact form, messages) | `express-rate-limit` with a MongoDB store; counters expire through a TTL index |
 | Login sessions | `sessions` collection with a TTL index (section 6) |
@@ -417,14 +459,14 @@ Two libraries also keep small collections of their own in the same database: the
 ### 4.2 Job queue
 
 ```ts
-// server/src/jobs/queue.ts: enqueue upserts by uniqueKey, so a reminder is never created twice
+// backend/src/jobs/queue.ts: enqueue upserts by uniqueKey, so a reminder is never created twice
 await enqueue('booking.expireRequest', { bookingId }, {
   runAt: addHours(new Date(), 24),
   uniqueKey: `expire-request:${bookingId}`,
   refId: bookingId,
 });
 
-// server/src/jobs/runner.ts: every instance polls every 5 s and claims one due job at a time
+// backend/src/jobs/runner.ts: every instance polls every 5 s and claims one due job at a time
 const job = await Job.findOneAndUpdate(
   { status: 'QUEUED', runAt: { $lte: new Date() } },
   { $set: { status: 'RUNNING', lockedAt: new Date(), lockedBy: instanceId }, $inc: { attempts: 1 } },
@@ -435,11 +477,11 @@ const job = await Job.findOneAndUpdate(
 - **One instance per job.** `findOneAndUpdate` is atomic, so when two API instances poll at the same moment, only one of them gets a given job.
 - **Retries:** a failed job is re-queued with exponential backoff (1 min, 5 min, 25 min, 2 h) up to `maxAttempts`, then marked `FAILED`. Failed jobs are listed in the admin dashboard with a Retry button.
 - **Crash recovery:** a job stuck in `RUNNING` for more than 10 minutes (its instance crashed) is put back in the queue. On a normal deploy or scale-in, the runner shuts down cleanly and puts back any job it cannot finish (section 13.4), so this only covers real crashes.
-- **Cancelling:** when a booking is cancelled, all its queued jobs are cancelled by `refId`.
-- **Handlers are idempotent:** each checks the current state before acting (for example, a payout handler skips a booking that already has a transfer), so a retried job never does the work twice.
+- **Cancelling:** when a booking is cancelled, its queued reminder, expiry and trip-check jobs are cancelled by `refId`. Payout jobs are not: the cancellation service replaces the trip's payout job with a `CANCELLATION_FEE` payout for the Host's share of any kept fee (section 8.2), or cancels it when nothing is due.
+- **Handlers are idempotent:** each checks the current state before acting (for example, a payout handler skips a `payouts` record that already has a transfer, and the unique index on booking, payout type and extra charge stops a second record being created), so a retried job never does the work twice.
 - **Recurring jobs:** after a daily job runs, it schedules its next run with a dated `uniqueKey` (e.g. `daily.hostReminders:2026-10-01`). The unique index means several instances create it only once.
 - **Cleanup:** finished jobs are deleted after 30 days by the TTL index on `finishedAt`.
-- **Setting:** `RUN_JOBS=true|false` per instance. At launch every instance runs jobs. At larger scale the runner runs as its own ECS service from the same image (section 13.6).
+- **Setting:** `RUN_JOBS=true|false` per instance (on by default). Every backend task runs jobs, so adding tasks also adds job capacity. The job runner always stays inside the backend app and is never a separate deployment (section 13.6).
 
 ### 4.3 Job list
 
@@ -447,7 +489,7 @@ const job = await Job.findOneAndUpdate(
 |---|---|---|
 | `email.send` | Immediately | Renders the React Email template and sends it through Resend. Up to 5 attempts. |
 | `sms.send` | Immediately | Sends an SMS through Twilio |
-| `booking.expirePaymentHold` | 30 min after checkout starts | Releases the held dates if payment was not completed |
+| `booking.expirePaymentHold` | 30 min after the booking is created (section 8.2, dates held) | Releases the held dates if payment was not completed |
 | `booking.expireRequest` | 24 h after a request-to-book | Expires the request, releases the payment authorisation, emails both parties |
 | `reminder.pickup` | 24 h and 2 h before the trip starts | Email + SMS + a system message in the booking chat |
 | `reminder.return` | 2 h before the trip ends | Email + SMS + a system message in the booking chat |
@@ -460,20 +502,20 @@ const job = await Job.findOneAndUpdate(
 | `daily.dataRetention` | Daily | Deletes data that has passed its retention period, such as ID images 90 days after verification (section 14) |
 | `trip.startCheck` | 1 h and 2 h after the trip start | If check-in has not been done, reminds both parties, then alerts support (possible no-show, section 8.2) |
 | `trip.returnCheck` | At the return time plus the grace period, and 24 h later | Late return: reminds the Guest and tells the Host, who can report it. If check-out is still missing after 24 h, alerts support to complete the trip (section 8.2). |
-| `reviews.reveal` | When a booking's review window closes | Publishes any review still waiting for the other side's review (section 9, Days 21–22) |
+| `reviews.reveal` | When a booking's review window closes | Publishes any review still waiting for the other side's review (section 9, Days 21–22). A review held by moderation stays held until a moderator clears it. |
 
 ### 4.4 Realtime
-- Socket.IO runs on the same Express server. Users join a room for their own notifications and one for each booking chat they are part of.
+- Socket.IO runs on the backend's Express server, and the website connects to it on `api.<domain>`. Users join a room for their own notifications and one for each booking chat they are part of.
 - `@socket.io/mongo-adapter` passes events between API instances through a MongoDB collection, so a message sent to one instance reaches a user connected to another.
 - Job handlers run in the same process, so they emit notifications through the same Socket.IO server.
 - If the socket disconnects, TanStack Query refetches messages and notifications when the connection returns, so nothing is lost.
-- With 2 or more app tasks behind the load balancer, the client connects over WebSocket first. HTTP long-polling is only a fallback for networks that block WebSockets, and load balancer stickiness keeps a long-polling client on one task (section 13.4).
+- With 2 or more backend tasks behind the load balancer, the website connects over WebSocket first. HTTP long-polling is only a fallback for networks that block WebSockets, and load balancer stickiness keeps a long-polling client on one task (section 13.4).
 
 ---
 
-## 5. Pricing Engine (`shared/src/pricing.ts`)
+## 5. Pricing Engine (`backend/src/modules/pricing/pricing.ts`)
 
-One function, imported as `@driveshare/shared/pricing`, is shared by the client (for display) and the API (the source of truth):
+One function in the backend is the only place prices are calculated. The frontend never calculates a price: search results, the listing page, Saved cars and checkout show the amounts the API returns (estimated totals in search results, `POST /vehicles/:id/quote` for chosen dates and options, section 2.3):
 
 ```
 days            = ceil((end - start) / 24h)          counted on NZ wall-clock time (see "Trip days" below)
@@ -484,7 +526,10 @@ delivery        = pickup option fee + return option fee
 serviceFee      = rental × PLATFORM_GUEST_FEE_PCT   (from platformSettings)
 protection      = selected protection plan (optional / mandatory per plan config)
 total (incl GST)= rental + delivery + serviceFee + protection
-gstComponent    = total × 3/23                       (NZ GST 15%, prices shown GST-inclusive)
+gstComponent    = total × 3/23                       (NZ GST 15%, prices shown GST-inclusive. PROVISIONAL: assumes
+                                                      every line carries GST. GST is calculated and stored for each
+                                                      line item, so the rules confirmed in section 16 item 7 (e.g. no
+                                                      GST on an unregistered Host's rental) change only this step.)
 hostPayout      = rental + delivery − HOST_COMMISSION_PCT × rental
 
 After the trip (unless unlimitedKm):
@@ -492,7 +537,7 @@ extraKm         = max(0, (checkOutOdometer − checkInOdometer) − kmAllowanceP
 extraKmCharge   = extraKm × extraKmCents             (Host receives it less HOST_COMMISSION_PCT)
 ```
 
-Checkout shows **Mandatory** and **Optional** line items in separate groups (spec §7), with the total in NZD. All fee percentages and protection plans are admin-configurable. The cancellation policy engine (`shared/src/policies.ts`) calculates refunds and cancellation fees the same way on both sides. When the Guest cancels, it applies the booking's cancellation tier. When the Host cancels, the Guest gets a full refund and the Host cancellation fee from `platformSettings` applies (section 8). How GST applies to the Host's rental amount and to the platform's fees is confirmed by the client's accountant (section 16) before the pricing engine is finalised.
+Checkout shows **Mandatory** and **Optional** line items in separate groups (spec §7), with the total in NZD. All fee percentages and protection plans are admin-configurable. The cancellation policy engine (`backend/src/modules/bookings/policies.ts`) calculates refunds and cancellation fees, and the frontend shows its result through `cancellation-preview` before the user confirms. When the Guest cancels, it applies the booking's cancellation tier. When the Host cancels, the Guest gets a full refund and the Host cancellation fee from `platformSettings` applies (section 8). How GST applies to the Host's rental amount and to the platform's fees is confirmed by the client's accountant (section 16) before the pricing engine is finalised.
 
 - **Trip days:** `days` is counted on NZ wall-clock time (`Pacific/Auckland`), so a 10 am to 10 am trip is one day even when a daylight-saving change makes it 23 or 25 hours long. Any other part day counts as a full day.
 - **Estimated totals:** the estimated total on cards, listings and Saved cars comes from this same function and includes every mandatory charge (rental, service fee, mandatory protection and GST), so the Guest never meets a surprise fee at checkout (spec §29, transparent pricing). Delivery is added when the Guest chooses it; airport searches already include the airport delivery fee (section 3).
@@ -509,11 +554,11 @@ Checkout shows **Mandatory** and **Optional** line items in separate groups (spe
 ### 6.1 Sign-in and sessions
 - Email and password (bcrypt), with an email verification link and a password reset link sent by email.
 - Mobile verification by SMS one-time code (Twilio Verify). Phone numbers are stored in E.164 format. The input defaults to +64 but accepts overseas numbers, so international visitors can verify too (spec §23).
-- Short-lived JWT access token (15 min) and a rotating refresh token (30 days), both in `httpOnly`, `Secure`, `SameSite=Lax` cookies. Refresh tokens are stored hashed in the `sessions` collection, and a TTL index removes them when they expire. Mobile apps can use the same tokens via the `Authorization` header.
+- Short-lived JWT access token (15 min) and a rotating refresh token (30 days), both in `httpOnly`, `Secure`, `SameSite=Lax` cookies set by the backend on `api.<domain>`. The website on `www.<domain>` is on the same site, so the browser sends the cookies with every API call (`credentials: 'include'`), and the backend accepts only the frontend's own origin (section 2.3). Refresh tokens are stored hashed in the `sessions` collection, and a TTL index removes them when they expire. Mobile apps can use the same tokens via the `Authorization` header.
 - **Sign in during checkout:** a Guest who is not logged in can sign in or create an account inside the booking flow without losing their selected car, dates and options (spec §7 step 6).
 - **Agreements:** Terms and Privacy are accepted at sign-up, the Guest Agreement at checkout and the Host Agreement in the Host application. Each acceptance is saved with the document version, time and IP address. When a legal document changes, users accept the new version at their next sign-in.
 - Rate limiting on auth routes (MongoDB store, section 4.1), keyed on the visitor's real IP behind CloudFront and the load balancer (section 13.4), and account lockout after repeated failures.
-- **When email and mobile are verified (spec §22):** the mobile number is verified by SMS code inside checkout and inside the Host application, without leaving the page. The email link is sent at sign-up; it does not block a first checkout (keeping checkout fast, spec §20), but it must be clicked before the first trip starts or the Host application is approved. Final rules are part of section 16, item 5.
+- **When email and mobile are verified (spec §22):** the mobile number is verified by SMS code inside checkout and inside the Host application, without leaving the page. The email link is sent at sign-up; it does not block a first checkout (keeping checkout fast, spec §20), but it must be clicked before the first trip starts or the Host application is approved. It is enforced at check-in: an unverified Guest sees a one-tap "resend and verify" step before the check-in photos, and the booking confirmation email and the 24 h pickup reminder both ask them to verify. Final rules are part of section 16, item 5.
 - **Account changes:** a new email address is verified before it replaces the old one; a new phone number needs a new SMS code; changing the password signs out every other session and sends the Password changed email.
 - **Staff two-factor sign-in (spec §25):** admin and support accounts must set up an authenticator app (TOTP) before the admin portal opens, and enter a code at each sign-in. A lost authenticator is reset by another admin, and the reset is written to the audit log.
 
@@ -535,8 +580,8 @@ Checkout shows **Mandatory** and **Optional** line items in separate groups (spe
 
 ## 7. Email & Notifications
 
-**Provider:** Resend (simple, good deliverability, React Email support), behind a `Mailer` interface in `server/src/integrations` so it can be swapped for AWS SES.
-**Local development:** a console mailer prints each email's subject and links to the terminal and saves the HTML to `server/.mail/`. `npm run email:dev -w server` previews every template in the browser. Staging sends real emails through Resend, so the client can receive them.
+**Provider:** Resend (simple, good deliverability, React Email support), behind a `Mailer` interface in `backend/src/integrations` so it can be swapped for AWS SES.
+**Local development:** a console mailer prints each email's subject and links to the terminal and saves the HTML to `backend/.mail/`. `npm run email:dev` in `backend/` previews every template in the browser. Staging sends real emails through Resend, so the client can receive them.
 
 **Flow:** service event → `notify(userId, 'BOOKING_CONFIRMED', data)` → `notifications` document (shown in the in-app notification centre and pushed over Socket.IO) → `email.send` / `sms.send` job (section 4) → provider API → delivery status stored on the notification, updated by the providers' status webhooks (Resend and Twilio). Failed sends retry up to 5 times with exponential backoff, and bounced emails are shown to support staff on the user's record.
 
@@ -552,7 +597,7 @@ Checkout shows **Mandatory** and **Optional** line items in separate groups (spe
 
 All the example notifications in spec §19 are covered: booking received, booking confirmed, payment successful, pickup reminder, return reminder, new message, verification required, payout processed, cancellation and incident update.
 
-**Email templates** (`server/src/emails`)
+**Email templates** (`backend/src/emails`)
 
 | Group | Templates |
 |---|---|
@@ -581,7 +626,7 @@ All the example notifications in spec §19 are covered: booking received, bookin
 9. **Payouts:** the `payout.transfer` job creates a Transfer to the Host 24 h after the trip starts. The payout is held if an incident or card dispute is open, check-in is missing, or payout setup is unfinished (section 4.3). Hosts see upcoming and paid payouts.
 10. **Cancellations:** the policy engine calculates the refund and the cancellation fee, and the API issues a full or partial refund and records both on the booking and payment. Admins, and support staff with the `REFUNDS` permission, can also issue refunds from the admin dashboard.
     - **Host cancellations:** the Guest always gets a full refund. Any Host cancellation fee (set in `platformSettings`; $0 until the client decides, section 16 item 3) is added to the Host's `feesOwedCents` and deducted from their next payout, shown as a line on that payout. Admins can waive the fee, and the waiver is written to the audit log. Repeated Host cancellations raise a risk flag for admins.
-11. **Other post-trip charges:** when an incident is resolved against the Guest (fuel not returned as the listing's fuel policy requires, cleaning, late return, or a damage amount allowed by the Guest Agreement), an admin adds an extra charge to the booking, linked to the incident. It uses the same saved-card, pay-link and retry flow as extra kilometres, and the Host's share is added to their payout.
+11. **Other post-trip charges:** when an incident is resolved against the Guest (fuel not returned as the listing's fuel policy requires, cleaning, late return, or a damage amount allowed by the Guest Agreement), an admin adds an extra charge to the booking, linked to the incident. It uses the same saved-card, pay-link and retry flow as extra kilometres. The trip's payout has usually been sent by then, so when an extra charge (extra kilometres included) succeeds, the Host's share is paid as a separate `EXTRA_CHARGE` payout for that charge, with the same hold rules.
 12. **Card disputes (chargebacks):** a `charge.dispute.created` webhook alerts admins, links the dispute to the booking, and holds any unpaid payout. Admins answer it in Stripe with the evidence from the booking (inspection photos, messages, agreement acceptance).
 13. All webhooks are verified by signature and are idempotent: each Stripe event ID is saved in `stripeEvents` (unique index), so a repeated event is skipped.
 14. **Request-to-book payments:** the card is authorised at checkout while the dates are held. When the Host accepts, the payment is captured and the booking is confirmed. A decline, the 24 h expiry or a rejected verification releases the authorisation. Card authorisations last about 7 days, so the 24 h request window is always within that limit.
@@ -609,7 +654,7 @@ CONFIRMED ──check-in done──▶ ACTIVE ──check-out done (or completed
 PENDING or CONFIRMED ──cancelled by the Guest, the Host or an admin (incl. no-shows)──▶ CANCELLED
 ```
 
-- **Dates held during checkout and requests:** when checkout starts, a `HOLD` block is written through the availability service (section 3). It lasts 30 minutes for payment, and is kept while a request waits for the Host (up to 24 h), so nobody else can book those dates. It becomes a `BOOKED` block on confirmation and is removed on expiry, decline or cancellation. The Host's calendar shows held dates as "Request pending".
+- **Dates held during checkout and requests:** until the Guest signs in, checkout only checks availability and prices through `/quote`, and holds nothing. When the signed-in Guest continues from the price review to verification and payment, `POST /bookings` creates the `PAYMENT_PENDING` booking and writes a `HOLD` block through the availability service (section 3). If the dates were taken in the meantime, the Guest is told straight away and can pick other dates. It lasts 30 minutes for payment, and is kept while a request waits for the Host (up to 24 h), so nobody else can book those dates. It becomes a `BOOKED` block on confirmation and is removed on expiry, decline or cancellation. The Host's calendar shows held dates as "Request pending".
 - **Verification at checkout (spec §7 step 7):** a Guest who must verify (rules in settings) does it inside checkout. Stripe Identity usually answers within minutes, and checkout waits for the result. If the check needs manual review, the booking becomes a request, even for an Instant Book car: the card is authorised, support staff are alerted, and the booking is confirmed when support approves it within 24 h. Otherwise it expires and the authorisation is released. The Guest is told what is happening at every step.
 - **Dashboard grouping (spec §8, §9):** *Upcoming* shows `CONFIRMED` trips plus `PENDING` requests (labelled "Waiting for the Host" or "Verification in review"). *Current* shows `ACTIVE` trips, plus `CONFIRMED` trips whose start time has passed (with a prompt to complete check-in). *Completed* shows `COMPLETED` trips. *Cancelled* shows `CANCELLED`, `DECLINED` and `EXPIRED` bookings, each labelled. `PAYMENT_PENDING` bookings are not shown.
 - **Check-in not done:** 1 h after the start time both parties are reminded, and after 2 h support is alerted (`trip.startCheck`). If the Host is not there (for example a delivery or a key-box handover), the Guest can take the check-in photos and readings, and the Host confirms them later; the report records who took each photo. A trip's payout waits until check-in is done (a kept cancellation fee is paid without one, section 4.3).
@@ -638,22 +683,22 @@ PENDING or CONFIRMED ──cancelled by the Guest, the Host or an admin (incl. n
 
 **Status key:** ✅ Done · 🟡 Partly done (the note says what is left) · ⬜ Not started · 👤 Needs the client or the design team (not a coding task)
 
-**Progress:** the checklist was reset on 24/09/2026 when the stack was simplified (no Redis, no migration tool, no monorepo tooling). No tasks have started yet. The same day, hosting was moved to AWS (section 13), and the plan was cross-checked requirement by requirement against the specification ([project_requirements.md](project_requirements.md)). The gaps found were added to the relevant sections and rows, and every requirement is traced in Appendix A. A second, deeper cross-check on 25/09/2026 fixed the build order of in-app and SMS notifications, and added the rest of the task dependencies with phase gates, Instant Book and cancellation-tier choices in onboarding, missing API endpoints, indexes, validation rules and booking edge cases, GST handling for GST-registered Hosts, NZ marketing-message and fair-trading rules, a load test, and new client inputs (section 16, items 18–19).
+**Progress:** the checklist was reset on 24/09/2026 when the stack was simplified (no Redis, no migration tool, no monorepo tooling). No tasks have started yet. The same day, hosting was moved to AWS (section 13), and the plan was cross-checked requirement by requirement against the specification ([project_requirements.md](project_requirements.md)). The gaps found were added to the relevant sections and rows, and every requirement is traced in Appendix A. A second, deeper cross-check on 25/09/2026 fixed the build order of in-app and SMS notifications, and added the rest of the task dependencies with phase gates, Instant Book and cancellation-tier choices in onboarding, missing API endpoints, indexes, validation rules and booking edge cases, GST handling for GST-registered Hosts, NZ marketing-message and fair-trading rules, a load test, and new client inputs (section 16, items 18–19). Also on 25/09/2026, the website name was set to **Rento Vroom**, and the product was split into **two separately deployed apps**, `frontend/` (React) and `backend/` (Node.js), with no shared package and nothing else deployed (sections 1, 2 and 13). No tasks had started, so no work was lost.
 
 ### Phase 1: Design & Foundation (Days 1–5)
 **Delivers:** design style guide, key page designs and the animation prototype; a staging link where you can create an account and receive a verification email.
 
 | Day | Tasks | Status |
 |---|---|---|
-| 1 | Kick-off workshop: fees, cancellation tiers (including how a kept Guest cancellation fee is shared with the Host, and no-shows), security deposit, protection, driver eligibility (age, licence classes, overseas licences and IDP), when verification is required, GST treatment, the final brand name (section 16, item 1), items the spec does not define (item 13) and the optional NZ licence-check and plate-lookup services (item 15). Confirm that Stripe Identity is available for the client's NZ Stripe account (section 17). Client creates the AWS, Stripe, Resend, Twilio, Cloudinary, Google Cloud and MongoDB Atlas accounts and confirms the hosting region (by Day 2, section 16 item 6). Until decisions arrive, launch defaults live in `shared/src/policies.ts` and are editable in `platformSettings`. | 👤 Client |
-| 1–2 | Project setup (section 2): npm workspaces (`client`, `server`, `shared`), TypeScript, ESLint/Prettier with the client/server import rule, env validation, docker-compose MongoDB replica set. GitHub Actions CI (lint, typecheck, test, build, Lighthouse and bundle size budgets). | ⬜ |
-| 2–3 | **AWS staging** (section 13): Dockerfile, CDK stack (VPC with NAT gateway, load balancer, ECS Fargate, ECR, S3 + CloudFront + WAF, Secrets Manager, CloudWatch alarms), GitHub Actions deploy through OIDC with the index sync as a one-off task, and the app settings AWS needs (`/healthz`, graceful shutdown, `trust proxy`, Socket.IO transports). Atlas staging database that accepts only the NAT gateway's IP. Sentry error monitoring on staging from the start. Staging live on `staging.<domain>` with HTTPS. | ⬜ |
-| 1–4 | Original luxury art direction: moodboard, photography and video selection, colours and fonts, leading to the **design style guide** and a **Figma component library** that matches the coded components in 12.3 (spec §30). High-fidelity Figma designs for Home, Search, Vehicle listing, Checkout and Host dashboard, for mobile and desktop, with notes on tablet and responsive behaviour. Design tokens in `shared/src/tokens.ts` → Tailwind theme, with a WCAG contrast test. | ⬜ Tokens · 👤 Designer |
+| 1 | Kick-off workshop: fees, cancellation tiers (including how a kept Guest cancellation fee is shared with the Host, and no-shows), security deposit, protection, driver eligibility (age, licence classes, overseas licences and IDP), when verification is required, GST treatment, the Rento Vroom logo, domain and name checks (section 16, item 1), items the spec does not define (item 13) and the optional NZ licence-check and plate-lookup services (item 15). Confirm that Stripe Identity is available for the client's NZ Stripe account (section 17). Client creates the AWS, Stripe, Resend, Twilio, Cloudinary, Google Cloud and MongoDB Atlas accounts and confirms the hosting region (by Day 2, section 16 item 6). Until decisions arrive, launch defaults live in the backend's default settings (`backend/src/modules/admin/default-settings.ts`) and are editable in `platformSettings`. | 👤 Client |
+| 1–2 | Project setup (section 2): the two apps, **`frontend/`** (React + Vite) and **`backend/`** (Express), each with its own `package.json`, TypeScript, ESLint/Prettier, tests and `.env.example`; backend env validation, CORS for the frontend's origin, and the docker-compose MongoDB replica set; the OpenAPI file and the frontend's generated API types (section 2.3). **Two GitHub Actions pipelines**, one per app, each running only when its folder changes (frontend: lint, typecheck, test, build, Lighthouse and bundle size budgets; backend: lint, typecheck, test, build, OpenAPI file up to date). | ⬜ |
+| 2–3 | **AWS staging for both apps** (section 13). **Backend:** Dockerfile, the backend CDK stack (VPC with NAT gateway, load balancer, ECS Fargate, ECR, CloudFront + WAF, Secrets Manager, CloudWatch alarms), deploy through OIDC with the index sync as a one-off task, and the app settings AWS needs (`/healthz`, graceful shutdown, `trust proxy`, Socket.IO transports), live on `api.staging.<domain>`. **Frontend:** the frontend CDK stack (S3, CloudFront with the page-routing function and the `/pages` route to the backend, section 1.4) and its deploy, live on `staging.<domain>`. Atlas staging database that accepts only the NAT gateway's IP. Sentry error monitoring in both apps from the start. Both on HTTPS. | ⬜ |
+| 1–4 | Original luxury art direction: moodboard, photography and video selection, colours and fonts, leading to the **design style guide** and a **Figma component library** that matches the coded components in 12.3 (spec §30). High-fidelity Figma designs for Home, Search, Vehicle listing, Checkout and Host dashboard, for mobile and desktop, with notes on tablet and responsive behaviour. Design tokens in `frontend/src/styles/tokens.ts` → Tailwind theme, with a WCAG contrast test; the email colours and fonts copied into `backend/src/emails/theme.ts`. | ⬜ Tokens · 👤 Designer |
 | 3–5 | Motion system (durations, easing curves, springs) and a **clickable prototype** (spec §30) that links the high-fidelity key screens into the main Guest flow (Home → Search → Vehicle listing → Checkout) plus the Host dashboard, on mobile and desktop, with the key animations: homepage hero, opening a car (card to listing), search filters, checkout. Motion building blocks in code (`MotionProvider`, `Reveal`, `Stagger`, `CountUp`, `Sheet`, sliding `Tabs`, View Transitions). | ⬜ Code · 👤 Designer |
 | 4–8 | Mid-fidelity flow designs (spec §30), for mobile and desktop (the Admin dashboard for desktop and tablet): Guest dashboard including the active trip view, Admin dashboard, Host application and vehicle onboarding, booking and payment flow (including 3-D Secure, payment failed, request waiting for the Host, verification in review and the extra-charge pay link), messaging, vehicle inspection (including an upload waiting for signal). A **states board** covering loading, empty, error and success states and marketplace states (dates unavailable, payment failed, verification pending, listing under review, vehicle suspended). Email template design. Developer-ready specs in Figma Dev Mode. | 👤 Designer |
-| 2–3 | Mongoose models for all collections and their indexes, `db:indexes` script, seed data (NZ cities, suburbs and airports, the 5 launch destinations and other popular places, 20 demo vehicles, test Hosts, Guests, a support user and an admin, FAQs, help articles). The development and staging seed also adds completed demo trips with reviews, so screens that show reviews, ratings and trip history can be built before the review feature (Days 21–22). Model tests against an in-memory replica set. | ⬜ |
-| 3–5 | Auth: sign-up, login, logout, email verification, password reset, mobile OTP (NZ and overseas numbers), agreement acceptance with versions. Password change, and email and phone changes that are verified again (section 6.1). Rotating refresh tokens, account lockout, rate limits, role and permission middleware, audit-log middleware (section 6). | ⬜ |
-| 3–5 | Mailer (Resend + console) + MongoDB job queue and runner (section 4) + templates: welcome, verify email, reset password, password changed. Client: React Router with lazy-loaded routes and role guards. Layout shell: header, footer (legal, support and social links), mobile nav, 404 and error pages, favicons and a web app manifest (the site can be added to a phone's home screen, the base for PWA push later). | ⬜ |
+| 2–3 | Mongoose models for all collections and their indexes, `db:indexes` script, seed data (NZ cities, suburbs and airports in the `places` collection, the 5 launch destinations and other popular places, placeholder legal documents, 20 demo vehicles, test Hosts, Guests, a support user and an admin, FAQs, help articles). The development and staging seed also adds completed demo trips with reviews, so screens that show reviews, ratings and trip history can be built before the review feature (Days 21–22). Model tests against an in-memory replica set. | ⬜ |
+| 3–5 | Auth: sign-up, login, logout, email verification, password reset, mobile OTP (NZ and overseas numbers), agreement acceptance with versions. Password change, and email and phone changes that are verified again (section 6.1). Rotating refresh tokens, account lockout, rate limits, role and permission middleware, audit-log middleware (section 6), and **staff two-factor sign-in** (TOTP), so the admin portal is protected from the first approval queue on Days 8–11. Placeholder legal documents (versioned) are seeded so agreement acceptance works from the start. | ⬜ |
+| 3–5 | Mailer (Resend + console) + MongoDB job queue and runner (section 4) + templates: welcome, verify email, reset password, password changed. Frontend: React Router with lazy-loaded routes and role guards, the typed API client and the SEO page table with its build step (section 1.4). Layout shell: header, footer (legal, support and social links), mobile nav, 404 and error pages, favicons and a web app manifest (the site can be added to a phone's home screen, the base for PWA push later). | ⬜ |
 | 5 | Staging check: create an account and receive the verification email. **Design sign-off** (look and feel, key screens, animation prototype). | 👤 Client |
 
 ### Phase 2: Core Marketplace (Days 6–15)
@@ -661,14 +706,14 @@ PENDING or CONFIRMED ──cancelled by the Guest, the Host or an admin (incl. n
 
 | Day | Tasks | Status |
 |---|---|---|
-| 6–7 | Component library in `client/src/components/ui` (DateTimeRangePicker, LocationAutocomplete, Gallery + lightbox, Stepper, Calendar, Slider, Badge, Sheet, Toast, Skeleton) with hover, press and focus states. Marketplace components (VehicleCard, PriceBreakdown, StickyBookingBar) in `client/src/features`. | ⬜ |
-| 6–8 | Search API: `$geoNear` search with **all 16 filters from spec §5**: price range, location and radius, vehicle type, make and model, year, automatic/manual, seats, fuel type, hybrid/EV, airport delivery, delivery available, Instant Book, minimum rating, unlimited kilometres, pet friendly, child seat. Distance from the searched location, availability exclusion when dates are given, sort (recommended, price, rating, distance, newest), pagination. Location autocomplete (NZ only) combining Google Places with our own cities, suburbs, destinations and airports. **Airport searches** also return cars that deliver to that airport, with the airport delivery fee in the estimated total (section 3). Estimated totals come from the shared pricing function, so its core (trip days in NZ time, discounts, fees and GST, with unit tests) is written first, on Days 6–7. Search Results URLs are `noindex` (section 1.4). | ⬜ |
-| 7–9 | **Homepage:** headline "Rent a car from local owners across New Zealand.", search module (Where are you going? with autocomplete, pick-up date and time, return date and time, **Search Cars**), secondary call to action "Have a car? Earn money by sharing it." with a **Become a Host** button, featured vehicles, popular NZ destinations, how it works, Host earnings, safety and trust, customer reviews, FAQs, footer. **Browse Cars** (all vehicles, no dates needed) and **Search Results** (with dates and estimated totals): cards with photo, make and model, year, location and distance, rating and completed trips, daily price, estimated total, delivery and Instant Book badges, key features. Filter sheet on phones, sidebar on desktop, filters in the URL, animated result changes, skeletons. The customer reviews section uses real published reviews only and stays hidden until the threshold in settings is reached. Searches and city pages with no cars show a helpful empty state with a Become a Host prompt. Cars without reviews yet show a **New** label instead of stars, and the minimum-rating filter leaves them out. A search with no place covers all of NZ, and a search with no results suggests removing filters or widening the radius. A signed-in Guest's last search is saved for the Saved cars totals. Search inputs follow the validation rules in section 3. | ⬜ |
+| 6–7 | Component library in `frontend/src/components/ui` (DateTimeRangePicker, LocationAutocomplete, Gallery + lightbox, Stepper, Calendar, Slider, Badge, Sheet, Toast, Skeleton) with hover, press and focus states. Marketplace components (VehicleCard, PriceBreakdown, StickyBookingBar) in `frontend/src/features`. | ⬜ |
+| 6–8 | Search API: `$geoNear` search with **all 16 filters from spec §5**: price range, location and radius, vehicle type, make and model, year, automatic/manual, seats, fuel type, hybrid/EV, airport delivery, delivery available, Instant Book, minimum rating, unlimited kilometres, pet friendly, child seat. Distance from the searched location, availability exclusion when dates are given, sort (recommended, price, rating, distance, newest), pagination. Location autocomplete (NZ only) combining Google Places with our own cities, suburbs, destinations and airports. **Airport searches** also return cars that deliver to that airport, with the airport delivery fee in the estimated total (section 3). Estimated totals come from the backend's pricing function and are returned with each result, so its core (trip days in NZ time, discounts, fees and GST, with unit tests) is written first, on Days 6–7. Search Results URLs are `noindex` (section 1.4). | ⬜ |
+| 7–9 | **Homepage:** headline "Rent a car from local owners across New Zealand.", search module (Where are you going? with autocomplete, pick-up date and time, return date and time, **Search Cars**), secondary call to action "Have a car? Earn money by sharing it." with a **Become a Host** button, featured vehicles, popular NZ destinations, how it works, Host earnings, safety and trust, customer reviews, FAQs, footer. **Browse Cars** (all vehicles, no dates needed) and **Search Results** (with dates and estimated totals): cards with photo, make and model, year, location and distance, rating and completed trips, daily price, estimated total, delivery and Instant Book badges, key features. Filter sheet on phones, sidebar on desktop, filters in the URL, animated result changes, skeletons. The customer reviews section uses real published reviews only and stays hidden until the threshold in settings is reached. **City and destination landing pages** (`/rental/:city`, from the `destinations` collection) are built here too, because the homepage destination tiles link to them; their SEO tags, structured data and final content are finished on Days 26–27. Searches and city pages with no cars show a helpful empty state with a Become a Host prompt. Cars without reviews yet show a **New** label instead of stars, and the minimum-rating filter leaves them out. A search with no place covers all of NZ, and a search with no results suggests removing filters or widening the radius. A signed-in Guest's last search is saved for the Saved cars totals. Search inputs follow the validation rules in section 3. | ⬜ |
 | 8–10 | **Vehicle listing page:** swipeable gallery (front, rear, driver side, passenger side, interior, dashboard/odometer, boot, tyres, existing damage) with full-screen view; make, model, year and variant; location; Host card with rating and trip history; price per day; transmission, fuel type, engine/powertrain, seats and doors; **registration and WOF information** (rego and WOF or CoF status with the expiry month, and the RUC status for diesel, EV and PHEV cars, without the number plate, section 3); fuel policy; kilometre allowance; delivery and pickup options; cancellation policy (the listing's tier); reviews; location map (suburb and approximate area only, drawn with the Maps Static API; the exact address after confirmation); **sticky Book button on mobile**. Shared-photo transition from card to listing. | ⬜ |
-| 8–11 | **Host application** (Host profile + Host Agreement) and **vehicle onboarding in 6 steps:** (1) rego, make, model, year, variant, **VIN or chassis number** (imports without a VIN), CoF and RUC details where they apply, **body type** (for the vehicle type filter), fuel type, **engine/powertrain** (engine size and cylinders, or EV range and battery), transmission, seats, doors, **key features** and extras (pet friendly, child seat available); (2) registration, WOF, insurance and other documents, plus the registered owner's written consent when the Host is not the owner; (3) photos: the **minimum required set** (front, rear, driver side, passenger side, interior, dashboard/odometer, boot, tyres, plus existing damage where there is any) with instructions, example shots and camera capture on phones, with **low-quality and missing photos flagged for review** (automatic checks in the browser for low resolution, darkness and blur; the flags are shown to support staff in the listing review queue); (4) daily price, weekly and monthly discounts, minimum and maximum rental, kilometre allowance or unlimited kilometres, extra-km price, **fuel policy**, **cancellation tier** (when the client lets Hosts choose, section 3); (5) availability calendar, blocked dates, minimum notice, preparation time, **Instant Book on or off** (off means every booking is a request the Host accepts; this drives the Instant Book badge and filter); (6) Host pickup location, delivery, airport delivery (with meeting instructions), custom delivery locations, delivery fees. Auto-saved drafts, resume where you left off, uploads to Cloudinary with progress, a missing-items check before submit (required documents and photo angles come from `platformSettings`, and fields follow the validation rules in section 3). A basic admin queue approves or rejects Host applications and approves, rejects or requests changes to listings, so a test listing can go live on staging. **Edits to live listings** follow the moderation rules in section 3: new photos and documents wait in the same queue, and rego, VIN or chassis number, make, model or year changes send the listing back to Under Review. An approved listing goes live once the Host's payout setup is finished (enforced from Days 17–18, section 8.2). | ⬜ |
+| 8–11 | **Host application** (Host profile + Host Agreement) and **vehicle onboarding in 6 steps:** (1) rego, make, model, year, variant, **VIN or chassis number** (imports without a VIN), CoF and RUC details where they apply, **body type** (for the vehicle type filter), fuel type, **engine/powertrain** (engine size and cylinders, or EV range and battery), transmission, seats, doors, **key features** and extras (pet friendly, child seat available); (2) registration, WOF, insurance and other documents, plus the registered owner's written consent when the Host is not the owner; (3) photos: the **minimum required set** (front, rear, driver side, passenger side, interior, dashboard/odometer, boot, tyres, plus existing damage where there is any) with instructions, example shots and camera capture on phones, with **low-quality and missing photos flagged for review** (automatic checks in the browser for low resolution, darkness and blur; the flags are shown to support staff in the listing review queue). The required angles in settings must be present before the listing can be submitted; missing recommended angles, and existing damage declared without a damage photo, are flagged to support staff instead of blocking, and a photo that support rejects is flagged back to the Host as missing; (4) daily price, weekly and monthly discounts, minimum and maximum rental, kilometre allowance or unlimited kilometres, extra-km price, **fuel policy**, **cancellation tier** (when the client lets Hosts choose, section 3); (5) availability calendar, blocked dates, minimum notice, preparation time, **Instant Book on or off** (off means every booking is a request the Host accepts; this drives the Instant Book badge and filter); (6) Host pickup location, delivery, airport delivery (with meeting instructions), custom delivery locations, delivery fees. Auto-saved drafts, resume where you left off, uploads to Cloudinary with progress, a missing-items check before submit (required documents and photo angles come from `platformSettings`, and fields follow the validation rules in section 3). A basic admin queue approves or rejects Host applications and approves, rejects or requests changes to listings, so a test listing can go live on staging. **Edits to live listings** follow the moderation rules in section 3: new photos and documents wait in the same queue, and rego, VIN or chassis number, make, model or year changes send the listing back to Under Review. An approved listing goes live once the Host's payout setup is finished (enforced from Days 17–18, section 8.2). | ⬜ |
 | 10–11 | **Availability calendar:** month and week views, booked dates blocked automatically, manual blocks, **recurring availability**, minimum notice, buffer time, admin override. The single transactional write path that **prevents double-booking** + the 20-simultaneous-bookings test. `HOLD` blocks for checkout and requests waiting for the Host (section 8.2), shown on the Host calendar as "Request pending". | ⬜ |
 | 10–12 | Pricing engine completed (section 5: protection plans, delivery fees, GST and the booked-terms copy, building on the Days 6–7 core) + `POST /vehicles/:id/quote` with trip rules (notice, min/max days, delivery options, protection plan). **Price breakdown in NZD:** rental, delivery, service fee, protection, GST, total, with mandatory and optional charges shown separately. | ⬜ |
-| 11–13 | **Booking flow (all 11 steps of spec §7):** pick-up and return location, date and time (Host location, delivery address or airport), availability check, price calculation, trip details and policies, sign in or sign up without leaving checkout, verification step (licence details now; the identity check is connected on Days 19–20), choose a saved card or add a new one with Stripe Payment Element (**cards, Apple Pay, Google Pay**), confirm. Verified idempotent webhooks, Instant Book and request-to-book with the 24 h expiry and 30 min payment hold (jobs), failed-payment handling. A Guest can withdraw a request before the Host answers (section 8.2). **`notify()` with its email, SMS (`sms.send` job) and in-app channels, plus a basic notification bell** (section 7, build order): the Host receives the booking by email, SMS and in-app, and accepts or declines it from a basic bookings page (the full dashboard follows in Phase 3). Confirmation sent to both parties. The booking lifecycle and date holds in section 8.2, including a booking that becomes a request while verification is in review. Apple Pay and Google Pay enabled by registering the staging domain with Stripe (section 8.1, item 17). | ⬜ |
+| 11–13 | **Booking flow (all 11 steps of spec §7):** pick-up and return location, date and time (Host location, delivery address or airport), availability check, price calculation, trip details and policies, sign in or sign up without leaving checkout, the booking and its date hold created once the Guest is signed in (section 8.2), verification step (mobile SMS code and licence details now; the identity check is connected on Days 19–20), choose a saved card or add a new one with Stripe Payment Element (**cards, Apple Pay, Google Pay**), confirm. Verified idempotent webhooks, Instant Book and request-to-book with the 24 h expiry and 30 min payment hold (jobs), failed-payment handling. A Guest can withdraw a request before the Host answers (section 8.2). **`notify()` with its email, SMS (`sms.send` job) and in-app channels, plus a basic notification bell** (section 7, build order): the Host receives the booking by email, SMS and in-app, and accepts or declines it from a basic bookings page (the full dashboard follows in Phase 3). Confirmation sent to both parties. The booking lifecycle and date holds in section 8.2, including a booking that becomes a request while verification is in review. Apple Pay and Google Pay enabled by registering the staging domain with Stripe (section 8.1, item 17). | ⬜ |
 | 13–14 | Cancellation policy engine + refund and cancellation fee calculation for **Guest and Host cancellations** (a Host cancellation refunds the Guest in full and records any Host cancellation fee, section 8), **no-shows**, request withdrawals, early returns and the Host's share of a kept Guest cancellation fee (sections 5 and 8.2). A refund and fee preview before the user confirms a cancellation (`/bookings/:id/cancellation-preview`). **Emails:** booking request, booking confirmed, **payment receipt** (GST), **cancellation**, declined/expired, payment failed, refund issued. | ⬜ |
 | 12–14 | **Public pages:** How It Works, Become a Host (earnings estimator using the client's assumptions, labelled as an estimate, section 16 item 18), Safety (including what to do after an accident, theft or breakdown: 111 in an emergency, roadside assistance, and reporting an incident), Insurance / Protection, FAQs (from the database, with FAQPage JSON-LD), About Us, Contact Us (form creates a support ticket), and the legal pages from CMS Markdown: **Terms & Conditions, Privacy Policy, Cancellation Policy, Host Agreement, Guest Agreement**. The Cancellation Policy page shows the live tiers from `platformSettings` next to its legal text, so it always matches what the system charges. Legal text is a placeholder until the client supplies it (section 16, item 11), and page copy is approved by the client (item 18). | ⬜ |
 | 6–14 | Signature animations built with each screen and checked against the prototype: cinematic homepage, page transitions, photo gallery, search filters, booking steps (section 12.4). | ⬜ |
@@ -688,7 +733,7 @@ PENDING or CONFIRMED ──cancelled by the Guest, the Host or an admin (incl. n
 | 20–21 | **Damage and incident reporting (spec §15):** Guest or Host reports, incident type, description, photo and document upload, **case number**, status workflow, assignment to support staff, admin updates visible to both parties, one party or internal only, and a **complete audit trail** of every event. Resolving a case can add an extra charge to the Guest (fuel, cleaning, late return, damage, tolls or fines where the Guest Agreement allows), linked to the case (section 8). No-show, toll and infringement-notice types (section 8.2). The accident, theft and breakdown forms start with emergency guidance (111 in an emergency, then the roadside assistance number from the protection plan). | ⬜ |
 | 20–22 | **Help and support:** help centre (help articles for Guests and Hosts), support ticket inbox for support staff (from the contact form, the dashboards and bookings). **Suspicious activity monitoring:** risk flags (many failed payments, booking velocity, card country different from the account, Stripe Radar warnings, repeated reports, repeated Host cancellations, the same licence on more than one account) shown to admins for review. | ⬜ |
 | 21–22 | **Two-way reviews and ratings (spec §16)** after a completed trip: overall, communication, cleanliness/condition, pickup/return, vehicle care/Guest behaviour, written review (the categories for each direction are listed in section 3). A review window from settings, with both reviews revealed together once both are in or the window closes (`reviews.reveal`), so neither side can retaliate. **Moderation under defined rules:** reviews with contact details, links or abusive language are held for review, anyone can report a review, and admins hide reviews with a recorded reason. **Notifications:** in-app notification centre, email, **SMS pickup and return reminders**, notification preferences, SMS quiet hours, and marketing opt-in with unsubscribe (section 7). | ⬜ |
-| 19–23 | **Admin dashboard (spec §18).** Overview: total users, active Hosts, active vehicles, upcoming bookings, booking revenue, platform fees, Host payouts, cancellations, incident cases, pending verifications, suspended users and vehicles, with a date-range filter. Capabilities: search and manage users, **approve or reject Host applications**, **approve or reject vehicle listings** (including new photos, new documents and key-detail changes on live listings), view and edit booking status (with calendar override), **suspend users**, **suspend vehicles**, manage disputes and incidents, **issue refunds where authorised**, **payments and payouts** (all payments, failed payments and unpaid extra charges; adding an extra charge from a resolved incident; scheduled, held, paid and failed Host payouts; waiving Host cancellation fees), manage fees and platform settings, manage **homepage content** and destination landing pages, manage **FAQs and help articles**, **platform reports** with CSV export (bookings, revenue, fees, payouts, cancellations, GST summary, built with MongoDB aggregations), **audit log**, staff roles and permissions, failed jobs with retry. Two-factor sign-in for all staff (section 6.1). Booking status edits follow the allowed transitions and run the same side effects, and suspensions follow the rules for bookings, listings and payouts (section 8.2). | ⬜ |
+| 19–23 | **Admin dashboard (spec §18).** Overview: total users, active Hosts, active vehicles, upcoming bookings, booking revenue, platform fees, Host payouts, cancellations, incident cases, pending verifications, suspended users and vehicles, with a date-range filter. Capabilities: search and manage users, **approve or reject Host applications**, **approve or reject vehicle listings** (including new photos, new documents and key-detail changes on live listings), view and edit booking status (with calendar override), **suspend users**, **suspend vehicles**, manage disputes and incidents, **issue refunds where authorised**, **payments and payouts** (all payments, failed payments and unpaid extra charges; adding an extra charge from a resolved incident; scheduled, held, paid and failed Host payouts; waiving Host cancellation fees), manage fees and platform settings, manage **homepage content** and destination landing pages, manage **FAQs and help articles**, **platform reports** with CSV export (bookings, revenue, fees, payouts, cancellations, GST summary, built with MongoDB aggregations), **audit log**, staff roles and permissions, failed jobs with retry, and the admin reset of a staff member's lost authenticator (two-factor sign-in itself is built with auth on Days 3–5, section 6.1). Booking status edits follow the allowed transitions and run the same side effects, and suspensions follow the rules for bookings, listings and payouts (section 8.2). | ⬜ |
 | 22–23 | **Design polish** pass across all screens with real content, on real phones and tablets. Design QA against Figma by the designer. | ⬜ · 👤 Designer |
 | 24 | QA pass on the full trip lifecycle (book, pick up, return, review, payout) + **dashboards and operational workflows sign-off**. | ⬜ QA · 👤 Client |
 
@@ -701,10 +746,10 @@ PENDING or CONFIRMED ──cancelled by the Guest, the Host or an admin (incl. n
 | 25–26 | **Testing on mobile, tablet and desktop**, on **Chrome, Safari (iOS and macOS) and Edge**, plus Android Chrome. Bug fixes. | ⬜ |
 | 26 | **Load test** (k6) on a temporary staging database seeded with 10,000 synthetic vehicles: search stays within the 300 ms budget (section 12.5), and bursts of simultaneous bookings, messages and jobs cause no double-bookings or lost jobs (spec §25, §31). **Security review** (OWASP checklist, NoSQL injection checks, CSRF protection (section 14), headers, rate limits, permission checks for support staff, staff two-factor sign-in, private files served only through signed URLs, what each party can see (section 6.2), `npm audit`; AWS: IAM least privilege, security groups, WAF rules, S3 public access blocked, CloudTrail, root account MFA, ECR image scan results). **Speed optimisation** against section 12.5: **Lighthouse 90+ on mobile**, Core Web Vitals, bundle size, image optimisation, MongoDB index review with `explain()`. 60 fps animation check on a mid-range Android phone, reduced-motion check. | ⬜ |
 | 26–27 | **SEO:** unique page titles, meta descriptions, structured data (JSON-LD) for every public route, social sharing previews (OG images), sitemap, robots.txt, **landing pages for Auckland, Wellington, Christchurch, Queenstown and Rotorua**, **Google Search Console**. **Analytics and conversion tracking:** GA4 events for search, listing view, checkout started, booking paid, Host sign-up and listing submitted, sent through one small event helper so ad-platform conversion tags (for example Google Ads) can be added later. Search Results pages `noindex` (section 1.4). Analytics disclosed in the Privacy Policy, with a cookie consent banner if the legal adviser requires one (section 14). | ⬜ |
-| 27 | **Email domain setup** (SPF, DKIM, DMARC on the sending subdomain). **Production:** the CDK production stack in the client's AWS account, Route 53 and ACM certificates for the client's domain (**HTTPS**), WAF, CloudWatch alarms and a budget alert, an Atlas cluster in the same region that accepts only the NAT gateway's IP, then the first production deploy and a rollback test. **Automated backups** of the database and of uploaded files (Cloudinary backup) verified with a test restore, **Sentry error monitoring** live. Stripe live mode with production webhooks, and the production domain registered with Stripe for Apple Pay and Google Pay. | ⬜ |
+| 27 | **Email domain setup** (SPF, DKIM, DMARC on the sending subdomain). **Production:** the backend and frontend CDK production stacks in the client's AWS account (`api.<domain>` and `www.<domain>`), Route 53 and ACM certificates for the client's domain (**HTTPS**), WAF, CloudWatch alarms and a budget alert, an Atlas cluster in the same region that accepts only the NAT gateway's IP, then the first production deploy of each app and a rollback test of each. **Automated backups** of the database and of uploaded files (Cloudinary backup) verified with a test restore, **Sentry error monitoring** live. Stripe live mode with production webhooks, and the production domain registered with Stripe for Apple Pay and Google Pay. | ⬜ |
 | 27–30 | **Founding Hosts:** the client's first Hosts create accounts and list their cars on production, and support staff approve them through the listing queue, so the site launches with real cars in its featured vehicles, city pages and search (production has no demo cars, section 16 item 16). | 👤 Client · ⬜ Support |
 | 28–29 | **User acceptance testing** with the client's team, then bug fixes. | 👤 Client · ⬜ Fixes |
-| 29 | **Admin training** session (admins and support staff) + **documentation**: admin guide, technical docs (README with setup, folder map and commands; OpenAPI docs; runbook for deploys and rollbacks, the AWS infrastructure (CDK), backups and failed jobs; data retention). | ⬜ |
+| 29 | **Admin training** session (admins and support staff) + **documentation**: admin guide, technical docs (README for each app with setup, folder map and commands; OpenAPI docs; runbook for deploying and rolling back each app, the AWS infrastructure (both CDK stacks), backups and failed jobs; data retention). | ⬜ |
 | 30 | **Go-live approval** + handover of source code and all hosting accounts. The 30 days of post-launch bug-fix support start. | 👤 Client |
 
 ### Task dependencies and critical path
@@ -713,13 +758,13 @@ The day ranges above follow these dependencies. A task starts when what it needs
 | Task (days) | Needs first | Unblocks |
 |---|---|---|
 | Client accounts and decisions (Days 1–2) | – | Staging (AWS, Atlas), email, SMS, uploads, payments and identity checks. Until decisions arrive, launch defaults stay in `platformSettings`. |
-| Project setup, CI and AWS staging (Days 1–3) | AWS and Atlas accounts | Every other task; every change is deployed to staging |
+| Project setup, CI and AWS staging for both apps (Days 1–3) | AWS and Atlas accounts | Every other task; every change to either app is deployed to staging |
 | Models, indexes and seed (Days 2–3) | Project setup | All API work. The seed's completed demo trips and reviews let review, rating and trip-history screens be built before Days 21–22. |
 | Auth, roles and audit-log middleware; mailer and job queue (Days 3–5) | Models; Resend and Twilio accounts | Host application, sign-in inside checkout, dashboards and admin portal; every email, reminder, expiry and payout job |
 | Design sign-off and component library (Days 1–7) | Brand inputs (section 16, item 1) | Every screen from Day 6 |
-| Pricing core (Days 6–7) | `shared` package | Estimated totals in search (Days 6–9), quotes and checkout (Days 10–13), earnings (Days 16–19) |
+| Pricing core (Days 6–7) | Backend project setup | Estimated totals in search (Days 6–9), quotes and checkout (Days 10–13), earnings (Days 16–19) |
 | Search API and autocomplete (Days 6–8) | Models, seed, Google Cloud account, pricing core | Homepage search, Browse Cars and Search Results (Days 7–9) |
-| Homepage, Browse Cars, Search Results and listing page (Days 7–10) | Component library, search API, seed data, design sign-off | The entry to checkout, comparing cars, SEO pages (Days 26–27) |
+| Homepage, Browse Cars, Search Results, city landing pages and listing page (Days 7–10) | Component library, search API, seed data, design sign-off | The entry to checkout, comparing cars, SEO pages (Days 26–27) |
 | Vehicle onboarding and approval queue (Days 8–11) | Auth, Cloudinary uploads, components | Real listings to search and book on staging |
 | Availability service and holds (Days 10–11) | Models | Quotes, booking holds, the Host calendar, admin overrides |
 | Booking flow and payments (Days 11–13) | Pricing, availability, auth, job queue, Stripe account | Cancellations (Days 13–14), dashboards (Days 16–19), booking chat (Days 17–19), handover (Days 19–21) |
@@ -843,7 +888,7 @@ Every section of the client's website specification, with where it is covered in
 | §1 Project overview: two-sided NZ marketplace, original branding, NZD, NZ users and operating requirements | Whole plan; 5, 12.1; 16 (item 1: original brand name, item 14: NZ operating obligations) | 1–30 |
 | §2 User types: Guest, Host, Administrator, Support/Operations staff | 6.2 roles and permissions | 3–5, 19–23 |
 | §3 Public pages (all 18, including Browse Cars, Search Results, Login, Sign Up and the 5 legal pages) | 1.4, 2.2, section 9 Phase 2 | 3–5, 7–14 |
-| §4 Homepage: headline, search module with dates and times, Become a Host call to action, all 8 content sections, footer | Section 9 (Days 7–9), 12.6 | 7–9 |
+| §4 Homepage: headline, search module with dates and times, Become a Host call to action, all 8 content sections (the footer is the eighth) | Section 9 (Days 7–9), 12.6 | 7–9 |
 | §5 Search results and Browse Cars: all card fields and all 16 filters, a "New" label for cars without reviews, search validation and empty and no-results states | 3 (location search, search validation), 5 (estimated totals), section 9 (Days 6–9), 12.6 | 6–9 |
 | §6 Vehicle listing: all 9 photo types and all vehicle information, incl. engine/powertrain, rego and WOF (plus CoF and RUC where they apply) | 3 (vehicles; location and plate privacy), section 9 (Days 8–10), 12.6 | 8–10 |
 | §7 Booking flow (all 11 steps, with the price and policies reviewed before sign-in) and price breakdown with mandatory and optional charges | 5, 6.1, 8.1, 8.2 (lifecycle, date holds, verification in review), section 9 (Days 11–13), 12.6 | 10–13, 19–20 |
@@ -887,15 +932,15 @@ Every section of the client's website specification, with where it is covered in
 The spec names "advanced Host earnings" and "advanced admin tools" without defining them. This plan reads them as the full earnings dashboard (period comparisons, per-booking breakdown, monthly chart and the GST-ready statement) and the admin tools built on Days 19–23 (payments and payouts view, risk flags, moderation queues, staff roles, audit log, failed-job retry and CSV reports). The client confirms this reading (section 16, item 17). The Later items are planned in section 10.5.
 
 ### 10.4 Spec items outside the 30 days, and how the build is ready for them
-These are excluded in MILESTONES.md. Adding any of them to the 30 days needs a change request. Section 10.5 describes how each one will be built.
+MILESTONES.md excludes most of these by name. Airport automation and third-party API integrations are spec Phase 3 items that MILESTONES.md does not name, so they should be added to its "Not included" list before it is signed, to avoid a different expectation (section 16, item 17). Adding any of them to the 30 days needs a change request. Section 10.5 describes how each one will be built.
 
 | Item (spec §) | Ready in the launch build |
 |---|---|
 | Push notifications for mobile apps / PWA (§13, §19, §26) | `notify()` sends through one adapter per channel; a push adapter and device-token storage are added without changing any notification events. The web app manifest ships at launch, so PWA web push then only needs a service worker and the push adapter. |
 | Map-based vehicle browsing (§21, §27) | Search already returns coordinates and distances from a `2dsphere` index, so a map view only needs the frontend and a map key |
 | Advanced analytics (§27) | All events are in MongoDB and GA4; reports are MongoDB aggregations that can be extended |
-| Native iOS and Android apps (§26, §27) | REST API with bearer tokens, shared Zod contracts, Socket.IO (section 11.1) |
-| Dynamic pricing, airport automation, fleet tools, referrals, loyalty, corporate accounts, API integrations, advanced fraud detection (§27) | Pricing is one shared function, airports are data, roles and permissions are extensible, and risk flags are already recorded |
+| Native iOS and Android apps (§26, §27) | REST API with bearer tokens, the OpenAPI contract generated from the backend's Zod schemas, Socket.IO (section 11.1) |
+| Dynamic pricing, airport automation, fleet tools, referrals, loyalty, corporate accounts, API integrations, advanced fraud detection (§27) | Pricing is one backend function, airports are data, roles and permissions are extensible, and risk flags are already recorded |
 
 ### 10.5 Post-launch roadmap
 How each spec item outside the 30 days will be built, in a suggested order. Each is quoted and scheduled as a change request after launch. The order follows the spec's launch phases (§27) and the dependencies between items. None of them needs the launch data model or API to be rebuilt: they add collections, fields and endpoints.
@@ -905,8 +950,8 @@ How each spec item outside the 30 days will be built, in a suggested order. Each
 | R1 | Push notifications for the PWA (§13, §19) | A service worker with Web Push (VAPID keys, the `web-push` library); a `pushSubscriptions` collection; a `PUSH` channel adapter in `notify()`; an opt-in prompt after the first booking, and push choices in notification preferences. Works in Chrome, Edge, Firefox and on Android, and on iPhone once the site is added to the home screen (iOS 16.4 or later). | The launch notification system (7) and web app manifest (Days 3–5) |
 | R2 | Map-based browsing (§21, §27 Phase 2) | A list/map switch on Search Results using the Google Maps JavaScript API, with marker clustering and price pins, and search by the visible map area (a `$geoWithin` box query) in the search API. Cars are pinned at their approximate location only (section 3). | Search API (Days 6–8) |
 | R3 | Advanced analytics (§27 Phase 2) | GA4's BigQuery export plus reporting on a read-only Atlas analytics node, in a BI tool such as Looker Studio or Metabase: the booking funnel, conversion by city and channel, Host supply and utilisation, cancellation and incident rates, cohort retention, and scheduled email reports. | GA4 events (Days 26–27), admin reports (Days 19–23) |
-| R4 | Native iOS and Android apps (§26, §27 Phase 3) | React Native (Expo), reusing `shared` (Zod contracts, pricing, NZ formatters) and the same REST API with bearer tokens; the Socket.IO client for chat; the native camera with an offline queue for inspections; push through APNs and Firebase Cloud Messaging via the R1 channel adapter; deep links from emails. Published to the App Store and Google Play. | R1, OpenAPI docs (Day 29) |
-| R5 | Dynamic pricing (§27 Phase 3) | A per-date price calendar for each car, with suggested prices from demand (searches and occupancy by city), seasons, NZ public and school holidays, events and lead time. Hosts opt in and set a minimum and maximum. The shared pricing function reads the per-date prices, so search, quotes and checkout stay consistent. | R3 (demand data) |
+| R4 | Native iOS and Android apps (§26, §27 Phase 3) | React Native (Expo), a third client of the same backend: API types generated from `backend/openapi.json` as in the website, and the same REST API with bearer tokens; the Socket.IO client for chat; the native camera with an offline queue for inspections; push through APNs and Firebase Cloud Messaging via the R1 channel adapter; deep links from emails. Published to the App Store and Google Play. | R1, OpenAPI docs (Day 29) |
+| R5 | Dynamic pricing (§27 Phase 3) | A per-date price calendar for each car, with suggested prices from demand (searches and occupancy by city), seasons, NZ public and school holidays, events and lead time. Hosts opt in and set a minimum and maximum. The backend pricing function reads the per-date prices, so search, quotes and checkout stay consistent. | R3 (demand data) |
 | R6 | Airport automation (§27 Phase 3; the spec does not define it) | Proposed: a flight number at checkout, with arrival tracking from a flight-status API that moves pickup reminders when a flight is late; standard handover instructions and photos for each airport; airport access and parking fees as line items; contactless key handover (key-box codes released at check-in). Confirmed with the client before it is quoted (section 16, item 17). | Airport data (section 3), handover (Days 19–21) |
 | R7 | Fleet tools for professional Hosts (§27 Phase 3) | Business Host accounts with team members and roles; bulk edits to prices, availability and trip rules; CSV import of vehicles; one calendar across the fleet; earnings and utilisation for each car. | Roles and permissions (6.2), earnings statements (Days 16–19) |
 | R8 | API integrations (§25, §27 Phase 3) | A partner API (API keys, scopes, rate limits and webhooks) from the existing OpenAPI contracts; iCal import and export for Hosts who also list elsewhere; an insurer integration for protection policies (spec §31); an accounting export (for example Xero) for GST reporting; the NZ licence-check and plate-lookup services if they were not connected at launch (section 16, item 15). | OpenAPI docs, availability service (section 3) |
@@ -976,7 +1021,7 @@ POST   /webhooks/resend | /webhooks/twilio   (email and SMS delivery status, sig
                                 help, reports, exports (CSV), staff, audit, jobs
 ```
 
-The OpenAPI spec is generated from the Zod schemas in `shared`, which keeps the API ready for native apps. `sitemap.xml`, `robots.txt` and page meta tags are served by the same Express server outside `/api/v1`.
+The backend serves the API on `https://api.<domain>/api/v1` (staging: `https://api.staging.<domain>/api/v1`). The OpenAPI spec is generated from the backend's Zod schemas into `backend/openapi.json`; the website's typed API client is generated from it (section 2.3), and the future native apps can use it the same way. Outside `/api/v1`, the backend also serves `/pages/cars/:slug`, `/pages/rental/:slug` and `/pages/sitemap.xml`, which the frontend's CloudFront calls for page tags and the sitemap (section 1.4), and `/healthz`. `robots.txt` is a static file in the frontend.
 
 ### 11.1 Ready for native apps (spec §26)
 
@@ -1029,12 +1074,12 @@ The site should feel **luxurious, calm and confident**, like a premium travel br
 | Touch target | min 44 × 44 px | Spec §20 |
 | Breakpoints | `sm 640` · `md 768` (tablet) · `lg 1024` · `xl 1280` | |
 
-The tokens are defined once in `shared/src/tokens.ts`, which generates these CSS variables and the Tailwind theme. The email templates use the same values (section 2.3).
+The tokens are defined once in the frontend, in `frontend/src/styles/tokens.ts`, which generates these CSS variables and the Tailwind theme. The email templates in the backend use a copy of the colours and fonts (`backend/src/emails/theme.ts`, section 2.3), checked by the designer during email QA.
 
-### 12.3 Component library (built in `client/src/components/ui`)
+### 12.3 Component library (built in `frontend/src/components/ui`)
 Button (primary, secondary, ghost, danger; sizes) · Input · Select · DateTimeRangePicker (NZ format, dates and times) · LocationAutocomplete · Checkbox/Switch · Slider (price range) · Badge (Instant Book, Delivery, EV, Airport, Verified) · Rating stars · PhotoGallery/Lightbox · Stepper (onboarding) · FileUpload/CameraCapture · Calendar (month/week) · StatCard · Chart · DataTable · Tabs · Modal/Drawer (mobile bottom sheet) · Toast · EmptyState · Skeleton loaders · Avatar + Verified tick · Timeline (incidents, bookings, tickets) · ReportDialog.
 
-Marketplace-specific components (VehicleCard, PriceBreakdown, StickyBookingBar, ChatBubble, InspectionCamera, DamageDiagram) live in `client/src/features` and are built from the generic components above.
+Marketplace-specific components (VehicleCard, PriceBreakdown, StickyBookingBar, ChatBubble, InspectionCamera, DamageDiagram) live in `frontend/src/features` and are built from the generic components above.
 
 Every component needs the following states: default, hover, focus (visible ring), disabled, loading, error and empty, matching the states board from the design phase. Hover, press, open and close states use the motion building blocks in 12.4.
 
@@ -1163,7 +1208,7 @@ A car with no reviews yet shows **New** in place of the stars, and its trip coun
 2. Protection plan: radio cards with a clear summary of cover
 3. Trip details, policies and price: fuel, kilometres, cancellation, and the price breakdown calculated by the API (spec §7 steps 4–5)
 4. Sign in or create an account (skipped when already signed in)
-5. Verification: licence details and identity check, where required (skipped when already verified). If the check needs manual review, the booking continues as a request (section 8.2).
+5. Verification: mobile number by SMS code (if not yet verified), then licence details and identity check where required (skipped when already verified). If the check needs manual review, the booking continues as a request (section 8.2).
 6. Payment: saved cards or a new card with the Stripe Payment Element, Apple Pay and Google Pay buttons
 7. Final price breakdown (spec §7): **Mandatory** (rental, with any weekly or monthly discount on its own line, service fee, and protection when the plan is mandatory) and **Optional** (delivery or airport delivery fee, and protection when the Guest chooses a plan), then the GST included in the total on its own line, with the **Total NZD** in bold
 8. Guest Agreement checkbox, then **Confirm and pay** (or **Request to book** for a car without Instant Book)
@@ -1192,70 +1237,83 @@ A car with no reviews yet shows **New** in place of the stars, and its trip coun
 
 ## 13. Deployment Architecture (AWS)
 
-The site runs on **AWS in Sydney (`ap-southeast-2`)**, in an AWS account owned by the client, in the same region as the MongoDB Atlas cluster (Atlas on AWS). The whole setup is written as code with **AWS CDK (TypeScript)** in `infra/`, so staging and production are built the same way and either can be rebuilt from scratch.
+Rento Vroom is **two deployments and nothing else**: the **frontend** (static files) and the **backend** (one container service). Both run on **AWS in Sydney (`ap-southeast-2`)**, in an AWS account owned by the client, in the same region as the MongoDB Atlas cluster (Atlas on AWS). Each app's AWS setup is written as code with **AWS CDK (TypeScript)** in its own folder (`frontend/infra/` and `backend/infra/`), so staging and production are built the same way, either app can be rebuilt from scratch, and deploying one app never redeploys the other.
 
 ```
-Route 53 (DNS) → CloudFront (HTTPS with ACM certificates, HTTP/3, Brotli) + AWS WAF
-                  ├─ /assets/*   → S3 bucket: hashed JS, CSS and fonts from the Vite build, cached for 1 year
-                  └─ everything else: pages, /api/v1, /socket.io, sitemap.xml, robots.txt, /healthz
-                       → Application Load Balancer (public subnets, accepts traffic from CloudFront only)
-                          → ECS Fargate service (private subnets, 2 tasks in 2 Availability Zones)
-                             one Docker image: REST API + Socket.IO + page HTML with SEO tags + job runner
-                              ├─ outbound traffic through a NAT gateway with a fixed Elastic IP
-                              ├─ MongoDB Atlas M10+, AWS Sydney (accepts only the NAT gateway's IP)
-                              └─ Stripe, Resend, Twilio, Cloudinary, Google Places, Sentry
+APP 1: FRONTEND   www.<domain>   (staging: staging.<domain>)
+Route 53 → CloudFront (HTTPS with ACM certificate, HTTP/3, Brotli)
+            ├─ /assets/*                        → S3 bucket: hashed JS, CSS and fonts, cached for 1 year
+            ├─ /cars/*, /rental/*, /sitemap.xml → backend /pages: page tags, cached for 60 s (section 1.4)
+            └─ every other page                 → S3 bucket: the page's prerendered HTML file, or index.html
+                                                  (chosen by a CloudFront Function)
 
-Supporting services: ECR (images) · Secrets Manager · CloudWatch (logs, metrics, alarms) · AWS Budgets · CloudTrail
+APP 2: BACKEND    api.<domain>   (staging: api.staging.<domain>)
+Route 53 → CloudFront (HTTPS with ACM certificate) + AWS WAF
+            └─ /api/v1, /socket.io, /pages, /healthz
+                 → Application Load Balancer (public subnets, accepts traffic from CloudFront only)
+                    → ECS Fargate service (private subnets, 2 tasks in 2 Availability Zones)
+                       one Docker image: REST API + Socket.IO + page tags + job runner
+                        ├─ outbound traffic through a NAT gateway with a fixed Elastic IP
+                        ├─ MongoDB Atlas M10+, AWS Sydney (accepts only the NAT gateway's IP)
+                        └─ Stripe, Resend, Twilio, Cloudinary, Google Places, Sentry
+
+Supporting services: ECR (backend images) · Secrets Manager (backend) · CloudWatch · AWS Budgets · CloudTrail
 ```
 
-**Region:** Sydney is the closest AWS region to NZ that offers every service used here and every Atlas cluster tier. AWS opened an Auckland region (`ap-southeast-6`) in September 2025, and Atlas supports dedicated M10+ clusters there. If the client wants data kept in NZ, production moves to Auckland by changing one CDK setting and creating the Atlas cluster there. Staging would stay in Sydney, because Atlas's smaller Flex tier is not offered in Auckland. The region is confirmed by Day 2 (section 16, item 6).
+**Region:** Sydney is the closest AWS region to NZ that offers every service used here and every Atlas cluster tier. AWS opened an Auckland region (`ap-southeast-6`) in September 2025, and Atlas supports dedicated M10+ clusters there. If the client wants data kept in NZ, production moves to Auckland by changing one setting in each app's CDK stack and creating the Atlas cluster there (the frontend holds no personal data; only its S3 bucket moves). Staging would stay in Sydney, because Atlas's smaller Flex tier is not offered in Auckland. The region is confirmed by Day 2 (section 16, item 6).
 
 ### 13.1 AWS services
 
 | Service | Setup | Why |
 |---|---|---|
-| **ECS on Fargate** | Production: 2 tasks (0.5 vCPU, 1 GB each) in 2 Availability Zones, auto scaling on CPU up to 6 tasks. Staging: 1 task. | Runs the container with no servers to manage or patch. 2 tasks give zero-downtime deploys and keep the site up if one Availability Zone fails. |
-| **Application Load Balancer** | One load balancer shared by staging and production (host-based rules, one target group each). WebSockets, health check on `/healthz`, cookie stickiness, 30 s deregistration delay. | Spreads traffic over the tasks, holds long-lived Socket.IO connections, and removes unhealthy tasks |
-| **CloudFront + AWS WAF** | One distribution per environment. WAF uses the AWS managed common and known-bad-input rules plus a per-IP rate limit. | HTTPS, HTTP/3 and Brotli from edge locations close to NZ users, caching, and a first filter against attacks before traffic reaches the app |
-| **S3** | Private bucket for the hashed build assets, readable only by CloudFront (origin access control). Files from older releases are kept for 30 days. | Assets load fast from the edge, and pages opened before a deploy keep working (13.3) |
-| **VPC** | 2 Availability Zones: public subnets for the load balancer and NAT gateway, private subnets for the tasks. One NAT gateway at launch. | The tasks cannot be reached from the internet, and all their outbound traffic leaves from one fixed IP that Atlas allows |
-| **Route 53 + ACM** | DNS for the client's domain. Free TLS certificates that renew automatically (CloudFront's in `us-east-1`, the load balancer's in Sydney). | HTTPS everywhere, with nothing to renew by hand |
-| **ECR** | One image repository. Images are tagged with the git commit, scanned on push, and the last 20 are kept. | Every deploy and rollback uses an exact, known image |
-| **Secrets Manager** | One secret per environment: Atlas connection string, JWT and encryption keys, and the Stripe, Resend, Twilio, Cloudinary, Google and Sentry keys | Secrets never sit in git or in the image. ECS passes them to the container as environment variables when it starts. |
-| **CloudWatch** | Container logs (Pino JSON, kept 30 days). Alarms for 5xx errors, unhealthy tasks, high CPU or memory, and failed jobs (from a log metric filter), emailed to the team through SNS. | Logs and alerts alongside Sentry's error tracking |
-| **IAM** | Task roles with only the permissions they need. GitHub Actions deploys through OpenID Connect (OIDC) with a short-lived role, so no AWS keys are stored in GitHub. | Least privilege (section 14) |
+| **S3 + CloudFront** (frontend) | One private bucket per environment for the built website, readable only by CloudFront (origin access control). One distribution per environment, with a small CloudFront Function that maps page URLs to their HTML files and redirects the bare domain to `www` (section 1.4). Hashed files from older releases are kept for 30 days. | The website is served from edge locations close to NZ users with no server to run or scale, and pages opened before a deploy keep working (13.3) |
+| **ECS on Fargate** (backend) | Production: 2 tasks (0.5 vCPU, 1 GB each) in 2 Availability Zones, auto scaling on CPU up to 6 tasks. Staging: 1 task. | Runs the container with no servers to manage or patch. 2 tasks give zero-downtime deploys and keep the API up if one Availability Zone fails. |
+| **Application Load Balancer** (backend) | One load balancer shared by staging and production (host-based rules, one target group each). WebSockets, health check on `/healthz`, cookie stickiness, 30 s deregistration delay. | Spreads traffic over the tasks, holds long-lived Socket.IO connections, and removes unhealthy tasks |
+| **CloudFront + AWS WAF** (backend) | One distribution per environment for the API. WAF uses the AWS managed common and known-bad-input rules plus a per-IP rate limit. | HTTPS and HTTP/3 close to NZ users, and a first filter against attacks before traffic reaches the API. Page-tag requests from the frontend's CloudFront pass through the same WAF. |
+| **VPC** (backend) | 2 Availability Zones: public subnets for the load balancer and NAT gateway, private subnets for the tasks. One NAT gateway at launch. | The tasks cannot be reached from the internet, and all their outbound traffic leaves from one fixed IP that Atlas allows |
+| **Route 53 + ACM** (both) | DNS for the client's domain: `www` (and the bare domain) for the frontend, `api` for the backend, and the same pair under `staging`. Free TLS certificates that renew automatically (CloudFront's in `us-east-1`, the load balancer's in Sydney). | HTTPS everywhere, with nothing to renew by hand |
+| **ECR** (backend) | One image repository. Images are tagged with the git commit, scanned on push, and the last 20 are kept. | Every deploy and rollback uses an exact, known image |
+| **Secrets Manager** (backend) | One secret per environment: Atlas connection string, JWT and encryption keys, and the Stripe, Resend, Twilio, Cloudinary, Google and Sentry keys. The frontend has no secrets (section 2.5). | Secrets never sit in git or in the image. ECS passes them to the container as environment variables when it starts. |
+| **CloudWatch** (both) | Backend container logs (Pino JSON, kept 30 days). Alarms for backend 5xx errors, unhealthy tasks, high CPU or memory, and failed jobs (from a log metric filter), and for the 5xx error rate of both CloudFront distributions, emailed to the team through SNS. | Logs and alerts alongside Sentry's error tracking |
+| **IAM** (both) | Task roles with only the permissions they need. Each pipeline deploys through OpenID Connect (OIDC) with its own short-lived role: the frontend role can only upload to its bucket and invalidate its distribution, and the backend role can only push its image and update its ECS service and tasks. No AWS keys are stored in GitHub. | Least privilege (section 14) |
 | **AWS Budgets + CloudTrail** | A monthly budget alert. CloudTrail records every change made to the AWS account. | Cost control and an audit trail for the infrastructure |
 
-### 13.2 Container image
-- A multi-stage `Dockerfile` at the repo root. The build stage (`node:22-bookworm-slim`) runs `npm ci` and `npm run build`: Vite builds `client/dist`, and tsup builds the server and its `seed` and `sync-indexes` scripts into `server/dist`. The runtime stage contains only `server/dist`, `client/dist` and the server's production dependencies, runs as the non-root `node` user, and starts with `node server/dist/server.js`.
-- `.dockerignore` keeps `node_modules`, `.env` files, `e2e`, `infra` and `.git` out of the build.
-- One image runs everywhere. Staging and production differ only in their environment variables and secrets, and `docker build` reproduces production on a developer's machine. Because the app is a standard container, it can move to another container host later without code changes.
+### 13.2 What each app ships
+- **Frontend:** `npm run build` in `frontend/` produces static files in `frontend/dist`: hashed JS, CSS and fonts under `assets/`, `index.html`, one HTML file for each static public page (section 1.4), `robots.txt`, favicons and the web app manifest. There is no server and no container. The environment's public `VITE_` values are built in, so staging and production are separate builds of the same commit.
+- **Backend:** a multi-stage `Dockerfile` in `backend/`. The build stage (`node:22-bookworm-slim`) runs `npm ci` and `npm run build`: tsup builds the server and its `seed` and `sync-indexes` scripts into `dist`. The runtime stage contains only `dist` and the production dependencies, runs as the non-root `node` user, and starts with `node dist/server.js`. `.dockerignore` keeps `node_modules`, `.env` files, `test`, `infra` and `.git` out of the build.
+- One backend image runs everywhere. Staging and production differ only in their environment variables and secrets, and `docker build` reproduces production on a developer's machine. Because the backend is a standard container and the frontend is plain static files, either app can move to another host later without code changes.
 
 ### 13.3 Deploys (GitHub Actions)
-- **Pipeline:** `npm ci` (npm cache) → lint, typecheck, test (API and services against an in-memory MongoDB replica set) → build → Lighthouse CI and bundle size check → Playwright E2E → build the Docker image and push it to ECR → upload the new hashed assets to S3 (nothing is deleted) → run the **index sync as a one-off ECS task** with the new image → update the ECS service to the new version → wait until the service is stable → smoke test (`/healthz`, the homepage and a search request).
+- **Two pipelines, one per app.** `frontend.yml` runs when files under `frontend/` change (and when `backend/openapi.json` changes, so every API change is checked against the website). `backend.yml` runs when files under `backend/` change. Each app is deployed on its own, and one app's deploy never rebuilds or restarts the other.
+- **Frontend pipeline:** `npm ci` (npm cache) → lint, typecheck, unit tests, and a check that the API types match `backend/openapi.json` → build → Lighthouse CI and bundle size check → upload the new hashed assets to S3 (nothing is deleted) → upload the HTML files → invalidate the HTML in CloudFront → smoke test (the homepage, a vehicle page and a search).
+- **Backend pipeline:** `npm ci` (npm cache) → lint, typecheck, test (API and services against an in-memory MongoDB replica set), and a check that `openapi.json` is up to date → build the Docker image and push it to ECR → run the **index sync as a one-off ECS task** with the new image → update the ECS service to the new version → wait until the service is stable → smoke test (`/healthz`, a search request and a vehicle page through `/pages`).
+- **End-to-end tests:** Playwright runs against staging after every staging deploy of either app. A production deploy of either app needs a green run.
+- **API changes go out backend first.** API changes are additive (new endpoints and fields; nothing is removed or renamed while the live website still uses it), so the live frontend keeps working with the new backend, and the frontend that uses the change is deployed after it.
 - **The pipeline never connects to the database.** The index sync runs inside the private subnets, so it reaches Atlas through the NAT gateway's allowed IP. The pipeline waits for it and stops if it fails.
-- **Environments:** `local` → `staging` (auto-deploy from `develop`, on `staging.<domain>`) → `production` (deploy from `main` after a manual approval in GitHub). At launch both run in the same AWS account, with separate ECS services, target groups, secrets, log groups and IAM roles. Each environment has its own Atlas project, database and credentials.
-- **Rolling deploys:** ECS starts the new tasks, waits until they pass the load balancer health check, then drains the old ones (minimum healthy 100%). The ECS deployment circuit breaker rolls back automatically if the new version never becomes healthy. A manual rollback redeploys the previous image tag.
-- **Pages opened before a deploy keep working:** old hashed assets stay in S3, so a visitor who loaded the site before a release can still open lazy-loaded pages. If a file is missing anyway, the client catches Vite's `vite:preloadError` event and reloads the page once.
-- **Seed data** is loaded the same way, as a one-off task. Staging gets the full seed. Production is seeded once with reference data only (NZ cities, airports, destinations, FAQs, help articles, default settings), without demo users or vehicles.
-- **Infrastructure changes** are reviewed with `cdk diff` in the pull request and applied with `cdk deploy`.
+- **Environments:** `local` → `staging` (auto-deploy from `develop`, on `staging.<domain>` and `api.staging.<domain>`) → `production` (deploy from `main` after a manual approval in GitHub, for each app, on `www.<domain>` and `api.<domain>`). At launch both environments run in the same AWS account, with separate buckets, distributions, ECS services, target groups, secrets, log groups and IAM roles. Each environment has its own Atlas project, database and credentials.
+- **Backend rolling deploys:** ECS starts the new tasks, waits until they pass the load balancer health check, then drains the old ones (minimum healthy 100%). The ECS deployment circuit breaker rolls back automatically if the new version never becomes healthy. A manual rollback redeploys the previous image tag.
+- **Frontend releases and rollbacks:** a release is live as soon as its HTML files are uploaded and invalidated (about a minute). A rollback re-uploads the previous release's HTML files, whose hashed assets are still in S3.
+- **Pages opened before a deploy keep working:** old hashed assets stay in S3, so a visitor who loaded the site before a release can still open lazy-loaded pages. If a file is missing anyway, the frontend catches Vite's `vite:preloadError` event and reloads the page once.
+- **Seed data** is loaded like the index sync, as a one-off backend task. Staging gets the full seed. Production is seeded once with reference data only (NZ cities, airports, destinations, FAQs, help articles, default settings), without demo users or vehicles.
+- **Infrastructure changes** are reviewed with `cdk diff` for the app's stack in the pull request and applied with `cdk deploy`.
 
-### 13.4 App settings that AWS needs
-- **Health check:** `GET /healthz` returns 200 when the app is running and connected to MongoDB. It returns 503 when it is not, or while the app is shutting down. The load balancer, ECS and the smoke test all use it.
-- **Graceful shutdown:** ECS sends `SIGTERM` when it replaces or removes a task. The app then fails its health check so no new traffic arrives, stops the job runner from claiming jobs and puts any unfinished job back in the queue, closes Socket.IO connections (browsers reconnect to the other task on their own), finishes the requests in progress, and disconnects from MongoDB. The ECS stop timeout is 60 s.
+### 13.4 Backend settings that AWS needs
+- **Health check:** `GET /healthz` returns 200 when the backend is running and connected to MongoDB. It returns 503 when it is not, or while the backend is shutting down. The load balancer, ECS and the smoke test all use it.
+- **Graceful shutdown:** ECS sends `SIGTERM` when it replaces or removes a task. The backend then fails its health check so no new traffic arrives, stops the job runner from claiming jobs and puts any unfinished job back in the queue, closes Socket.IO connections (browsers reconnect to the other task on their own), finishes the requests in progress, and disconnects from MongoDB. The ECS stop timeout is 60 s.
 - **Real visitor IP:** Express runs behind two proxies (CloudFront, then the load balancer), so `trust proxy` is set to `2`. Rate limits, risk flags, audit logs and agreement records then see the visitor's IP, not the load balancer's.
-- **Socket.IO over 2 tasks:** the client connects with `transports: ['websocket', 'polling']`, so it uses a WebSocket and falls back to HTTP long-polling only on networks that block WebSockets. Load balancer stickiness keeps a long-polling client on one task. CloudFront forwards all cookies and headers on `/socket.io/*` without caching, with a 60 s origin timeout. The MongoDB adapter (section 4.4) delivers events across tasks.
-- **Only CloudFront reaches the app:** the load balancer's security group accepts CloudFront's IP ranges only, and its listener also requires a secret header that CloudFront adds, so nobody can get around WAF by calling the load balancer directly. The tasks accept traffic from the load balancer only.
-- **Caching rules:** hashed assets are cached for a year. Public page HTML and public GET API responses that are the same for every visitor (featured vehicles, destinations, FAQs, CMS content) send `Cache-Control: public, s-maxage=60`. Anything tied to a user (account, bookings, messages, notifications) sends `private, no-store`. Cookies are not part of CloudFront's cache key, so only responses that do not depend on the user may be cached.
+- **Socket.IO over 2 tasks:** the website connects to `api.<domain>` with `transports: ['websocket', 'polling']` and `withCredentials: true`, so it uses a WebSocket and falls back to HTTP long-polling only on networks that block WebSockets. Load balancer stickiness keeps a long-polling client on one task. CloudFront forwards all cookies and headers on `/socket.io/*` without caching, with a 60 s origin timeout. The MongoDB adapter (section 4.4) delivers events across tasks.
+- **Only CloudFront reaches the backend:** the load balancer's security group accepts CloudFront's IP ranges only, and its listener also requires a secret header that CloudFront adds, so nobody can get around WAF by calling the load balancer directly. The tasks accept traffic from the load balancer only.
+- **Cross-origin requests:** the backend answers only the frontend's origin for its environment (CORS with credentials, section 2.3). CloudFront includes the `Origin` header in the API's cache key, so cached public responses always carry the right CORS headers.
+- **Caching rules:** hashed assets are cached for a year. The frontend's HTML files are sent with `no-cache`, so a new release shows at once. Page tags from `/pages` and public GET API responses that are the same for every visitor (featured vehicles, destinations, FAQs, CMS content) send `Cache-Control: public, s-maxage=60`. Anything tied to a user (account, bookings, messages, notifications) sends `private, no-store`. Cookies are not part of CloudFront's cache key, so only responses that do not depend on the user may be cached.
 - **WAF exceptions:** the managed rule that blocks request bodies over 8 KB is set to count-only, and the webhook paths (Stripe, Resend and Twilio) are excluded from the rate limit, so large Stripe events and bursts of delivery reports are never blocked. Photo and document uploads go directly to Cloudinary, not through AWS.
 
 ### 13.5 Backups and monitoring
-- **Backups:** Atlas daily snapshots retained for 30 days, plus continuous backup for point-in-time recovery. Uploaded files (vehicle photos, vehicle documents, inspection photos, incident evidence, message attachments) are not in the database, so Cloudinary's automatic backup is turned on to keep a backup copy of every upload; a file deleted or overwritten by mistake can be restored. A restore of both the database and a sample of files is tested before launch. The AWS setup itself needs no backup: it is rebuilt from the CDK code, and the images are in ECR.
-- **Monitoring:** Sentry for errors and real-user Core Web Vitals, and CloudWatch for logs, metrics and alarms (13.1). A Route 53 health check calls the homepage and `/healthz` from several locations and alerts the team through SNS if the site cannot be reached from outside AWS.
+- **Backups:** Atlas daily snapshots retained for 30 days, plus continuous backup for point-in-time recovery. Uploaded files (vehicle photos, vehicle documents, inspection photos, incident evidence, message attachments) are not in the database, so Cloudinary's automatic backup is turned on to keep a backup copy of every upload; a file deleted or overwritten by mistake can be restored. A restore of both the database and a sample of files is tested before launch. The AWS setup itself needs no backup: both apps' stacks are rebuilt from their CDK code, backend images are in ECR, and the website is rebuilt from git.
+- **Monitoring:** Sentry in both apps for errors (and real-user Core Web Vitals in the frontend), and CloudWatch for logs, metrics and alarms (13.1). A Route 53 health check calls the homepage (frontend) and `https://api.<domain>/healthz` (backend) from several locations and alerts the team through SNS if either app cannot be reached from outside AWS.
 
 ### 13.6 Scale path from 100 to 10,000+ vehicles
-- ECS auto scaling adds app tasks under load.
-- The job runner moves to its own ECS service from the same image (`RUN_JOBS=true` on it, `false` on the web tasks).
+- The frontend is static files on a CDN, so it needs no scaling.
+- ECS auto scaling adds backend tasks under load. Every task also runs background jobs, so job capacity grows with it. The job runner always stays inside the backend app; how many jobs each task runs at once is a setting, so heavy job traffic is tuned without deploying a separate worker.
 - A second NAT gateway in the other Availability Zone, and Atlas PrivateLink so database traffic stays inside AWS.
 - Raise the Atlas cluster tier (auto-scaling), send search and reporting reads to secondary nodes, and add Atlas Search for heavy filtering.
 - Separate AWS accounts for staging and production under AWS Organizations.
@@ -1265,31 +1323,32 @@ Supporting services: ECR (images) · Secrets Manager · CloudWatch (logs, metric
 
 | Item | NZD a month (approx.) |
 |---|---|
-| ECS Fargate: 2 production tasks + 1 staging task (0.5 vCPU, 1 GB each) | 110 |
-| Application Load Balancer (shared by staging and production) | 40 |
-| NAT gateway, public IP addresses and data transfer | 100 |
-| CloudFront, WAF, S3, Route 53, ECR, Secrets Manager, CloudWatch | 40–70 |
+| Frontend: S3 + CloudFront for production and staging | 5–15 |
+| Backend: ECS Fargate, 2 production tasks + 1 staging task (0.5 vCPU, 1 GB each) | 110 |
+| Backend: Application Load Balancer (shared by staging and production) | 40 |
+| Backend: NAT gateway, public IP addresses and data transfer | 100 |
+| Backend: CloudFront and WAF; Route 53, ECR, Secrets Manager, CloudWatch | 40–70 |
 | MongoDB Atlas: M10 production cluster with continuous backup + Flex staging cluster | 150–200 |
 | Resend (email) + Sentry (monitoring) | 80 |
-| **Total** | **about 520–600** |
+| **Total** | **about 525–615** |
 
-Rough figures at about NZD 1.70 per USD, Sydney prices, before GST, plus usage-based Stripe, SMS, Maps and Cloudinary fees. Confirm them with the AWS Pricing Calculator before quoting them to the client. AWS costs more than a simple hosting platform would, mainly for the load balancer and NAT gateway. In exchange, the app runs in the same region as the database, with WAF, private networking and automatic rollback. To save money, the staging task can be stopped outside working hours, and a Compute Savings Plan lowers the Fargate cost once usage is steady.
+Rough figures at about NZD 1.70 per USD, Sydney prices, before GST, plus usage-based Stripe, SMS, Maps and Cloudinary fees. Confirm them with the AWS Pricing Calculator before quoting them to the client. The frontend adds very little, because static files on a CDN need no servers. AWS costs more than a simple hosting platform would, mainly for the backend's load balancer and NAT gateway. In exchange, the backend runs in the same region as the database, with WAF, private networking and automatic rollback. To save money, the staging task can be stopped outside working hours, and a Compute Savings Plan lowers the Fargate cost once usage is steady.
 
 ---
 
 ## 14. Security & Compliance Checklist
-- HTTPS everywhere (ACM certificates on CloudFront and the load balancer), HSTS, Helmet security headers, strict CORS. AWS WAF on CloudFront with managed rule sets and a per-IP rate limit (section 13.4).
+- HTTPS everywhere (ACM certificates on both CloudFront distributions and the load balancer) and HSTS. Security headers: Helmet on the backend, and a CloudFront response headers policy on the frontend (Content Security Policy, frame and content-type options). Strict CORS: the backend accepts only the frontend's origin for its environment. AWS WAF on the backend's CloudFront with managed rule sets and a per-IP rate limit (section 13.4).
 - Zod validation on every input. Mongoose `sanitizeFilter` and `strictQuery` block NoSQL operator injection (for example, a login body of `{ "email": { "$ne": null } }`).
-- **Cross-site request forgery:** auth cookies are `SameSite=Lax`, and every request that changes data must carry the site's own `Origin` header. The mobile apps use bearer tokens, not cookies, so the check does not affect them.
+- **Cross-site request forgery:** auth cookies are `SameSite=Lax`, and every request that changes data must carry an `Origin` header matching the frontend's origin for that environment. The mobile apps use bearer tokens, not cookies, so the check does not affect them.
 - **Dependencies:** Dependabot security updates and `npm audit` in CI; ECR scans every image (section 13.1).
 - Role and permission checks on every API route; support staff get only the permissions they need, and each party sees only the other's details it needs (section 6.2).
 - **Staff two-factor sign-in:** every admin and support account uses an authenticator app (section 6.1).
 - **Private files:** vehicle documents, inspection photos, incident evidence, and message and ticket attachments are private and served only through short-lived signed URLs (section 3).
 - MongoDB Atlas accepts connections only from the NAT gateway's fixed IP (the address all app traffic leaves AWS from), with a separate database user per environment and only the permissions it needs. CI never connects to the database directly (section 13.3).
-- **AWS account:** the root user is protected with MFA and not used day to day; the team signs in through IAM Identity Center; GitHub Actions deploys with a short-lived OIDC role, so no AWS keys are stored anywhere; ECS task roles have least privilege; the tasks sit in private subnets and accept traffic only from the load balancer, which accepts only CloudFront; S3 public access is blocked; CloudTrail is on; ECR scans every image.
+- **AWS account:** the root user is protected with MFA and not used day to day; the team signs in through IAM Identity Center; each app's pipeline deploys with its own short-lived OIDC role, so no AWS keys are stored anywhere; ECS task roles have least privilege; the tasks sit in private subnets and accept traffic only from the load balancer, which accepts only CloudFront; S3 public access is blocked; CloudTrail is on; ECR scans every image.
 - Licence and ID documents stored privately and accessed through signed URLs only. Sensitive fields such as licence numbers are encrypted in the application (AES-256-GCM) before they are saved. Atlas also encrypts all data at rest.
 - PCI scope is kept minimal: card data never reaches our servers (Stripe Elements). 3-D Secure where the card requires it.
-- The client cannot import server code (section 2.3), and only `VITE_` variables reach the browser, so secrets cannot end up in the browser bundle. Server secrets live in AWS Secrets Manager, never in git or the Docker image.
+- The frontend is a separate project with no server code and no secrets (section 2.3), and only its public `VITE_` values are built into the browser bundle. Backend secrets live in AWS Secrets Manager, never in git or the Docker image.
 - **Fraud and suspicious activity:** email, mobile, identity and licence verification; Stripe Radar; risk flags for booking velocity, repeated failed payments, card country different from the account, repeated user reports and repeated Host cancellations, reviewed by admins. Advanced fraud detection comes later (spec §27).
 - **Messaging safety:** report and block, rate limits on messages, and all messages kept on the platform as evidence for incidents.
 - **Legal records:** acceptance of each version of the Terms, Privacy Policy and Host and Guest Agreements is stored with time and IP.
@@ -1313,7 +1372,7 @@ Rough figures at about NZD 1.70 per USD, Sydney prices, before GST, plus usage-b
 6. Emails and notifications are triggered where relevant.
 7. Its animations follow the motion system, respect reduced motion, and run smoothly on a mid-range phone.
 8. It stays within the speed budget (section 12.5).
-9. Its code sits in the right folder (`client`, `server` or `shared`) and passes lint, typecheck and tests in CI.
+9. Its code sits in the right app (`frontend` or `backend`), passes that app's lint, typecheck and tests in CI, and any API change comes with an updated `openapi.json` and regenerated frontend types.
 10. It works in Chrome, Safari and Edge, is deployed to staging and is verified by QA.
 11. It handles the validation rules and edge cases that apply to it (section 3 and section 8.2), with tests for them.
 
@@ -1322,7 +1381,7 @@ Rough figures at about NZD 1.70 per USD, Sydney prices, before GST, plus usage-b
 ## 16. Open Decisions & Client Inputs
 | # | Decision or input | Needed by |
 |---|---|---|
-| 1 | Business name, logo, domain name, and access to the domain's DNS settings (to point it at Route 53). The name must be original (spec §1, §29): the working name "DriveShare" is already used by a US peer-to-peer car rental service, so it is a placeholder only. Check the chosen name with IPONZ (trade marks), the Companies Office and domain availability. | Day 1 |
+| 1 | Brand: the website name is **Rento Vroom**. Still needed: the logo, the domain name (for example `rentovroom.co.nz`, if it is available) and access to the domain's DNS settings (to point it at Route 53). The name must be original (spec §1, §29), so before launch it is checked with IPONZ (trade marks) and the Companies Office, and the domain is registered. | Day 1 |
 | 2 | Guest service fee % and Host commission %, and who absorbs Stripe's card processing fees (the platform by default, section 5) | Day 1 |
 | 3 | Cancellation policy tiers, and whether Hosts choose a tier for each listing or one policy applies to every car; the fee (if any) when a Host cancels a confirmed booking; how a kept Guest cancellation fee is shared with the Host (section 5); how Guest and Host no-shows are treated; and whether unused days are refunded on an early return (default: no, section 8.2) | Day 1 |
 | 4 | Security deposit (yes/no, amount) | Day 1 |
@@ -1338,7 +1397,7 @@ Rough figures at about NZD 1.70 per USD, Sydney prices, before GST, plus usage-b
 | 14 | NZ operating and compliance obligations (spec §1, §22), confirmed by the client's legal and compliance advisers: whether the platform or its Hosts need a rental service (transport service) licence; the WOF or CoF inspection rules for cars rented to the public; Road User Charges for diesel, EV and PHEV cars; and how tolls and traffic or parking infringement notices are passed to the Guest (section 8.2) | Day 10 |
 | 15 | Optional NZ data services: automatic NZ driver licence checks (for example NZTA's Driver Licence Verification Service through an approved provider) and number-plate lookup (for example CarJam) to fill in vehicle details and flag stolen cars. Both are paid, and sign-up can take time; until they are connected, support staff check licences and documents by hand. | Day 1 (decide) |
 | 16 | Founding Hosts and their cars, listed on production before go-live (production has no demo cars), so the featured vehicles, city pages and search have real content | Days 27–30 |
-| 17 | Confirmation of how the plan reads the spec's undefined items: "advanced Host earnings" and "advanced admin tools" (section 10.3), and "airport automation" (roadmap 10.5, R6) | Day 24 |
+| 17 | Confirmation of how the plan reads the spec's undefined or open items: "advanced Host earnings" and "advanced admin tools" (section 10.3); "airport automation" (roadmap 10.5, R6) and third-party API integrations being after launch, although MILESTONES.md does not name them (section 10.4); when Host earnings count (on the trip's start date by default, so a month-long trip counts in full on its first day; spreading earnings across the trip days is the alternative); and that the required photo angles block submission while other missing photos are flagged for review (section 9, Days 8–11) | Day 5 (scope items); Day 16 (earnings); Day 24 (the rest) |
 | 18 | Page copy and figures: About Us, How It Works, Safety, Become a Host and the homepage sections, FAQs and help articles (drafted by the team from the spec, approved by the client), and the assumptions behind the Become a Host earnings estimator (typical daily prices and booked days by city) | Day 12 (estimator assumptions); Day 24 (approved copy) |
 | 19 | Languages for international visitors (spec §23): English only at launch, written in plain language (section 12.7). Other languages would be a change request. | Day 1 |
 
@@ -1347,9 +1406,10 @@ Rough figures at about NZD 1.70 per USD, Sydney prices, before GST, plus usage-b
 |---|---|
 | Insurance details arrive on Day 15, after the booking flow is built (Days 10–13) | Protection plans are config-driven: placeholder plans are used until then and replaced from the admin settings without code changes |
 | Scope creep from items outside the 30 days (push notifications, map search, advanced analytics, growth features) | They are listed in section 10.4 with how the build is ready for them. Changes go through a change request. |
-| 30-day timeline slips | Parallel frontend and backend work, a ready-made UI kit, a simple stack with one deployable service, 24 h client feedback, and a daily stand-up with a scope check |
-| AWS takes more setup than a one-click hosting platform | The whole setup is AWS CDK code, built and proven on staging on Days 2–3. Production is the same stack with different settings. |
-| A deploy breaks pages already open in a visitor's browser | Rolling deploys with health checks and automatic rollback, old assets kept in S3, and one page reload if a file is missing (section 13.3) |
+| 30-day timeline slips | Parallel frontend and backend work, a ready-made UI kit, a simple stack with just two deployable apps, 24 h client feedback, and a daily stand-up with a scope check |
+| AWS takes more setup than a one-click hosting platform | The whole setup is two AWS CDK stacks, one in each app folder, built and proven on staging on Days 2–3. Production uses the same stacks with different settings. |
+| A deploy breaks pages already open in a visitor's browser | Backend: rolling deploys with health checks and automatic rollback. Frontend: old assets kept in S3, and one page reload if a file is missing. API changes are additive, so an open page keeps working with a newer backend (section 13.3). |
+| The frontend and backend drift apart, now that they share no code | The backend's OpenAPI file is the contract: the frontend's API types are generated from it, both pipelines fail when it is out of date, API changes are additive and go out backend first, and Playwright tests both apps together on staging before any production deploy (sections 2.3 and 13.3) |
 | AWS costs higher than planned | Budget alert from day one, small tasks that scale up only under load, staging stopped outside working hours, and a Compute Savings Plan once usage is steady (section 13.7) |
 | No Redis: background jobs and realtime depend on MongoDB | Atomic job claims, unique job keys, crash recovery for stuck jobs, retries with backoff, a failed-jobs view with retry in the admin dashboard, and tests for the job runner. The runner can move to its own process when volume grows. |
 | No migration tool: schema changes on live data | Additive changes only, with defaults in the Mongoose schemas; no renamed fields; each release is checked on staging with production-like data before it goes live |
@@ -1373,7 +1433,7 @@ Rough figures at about NZD 1.70 per USD, Sydney prices, before GST, plus usage-b
 
 | Question | Answer | Details |
 |---|---|---|
-| What technology stack do you recommend and why? | React + Vite (TypeScript) for the website, Node.js + Express for the API, MongoDB Atlas for data. One language across the whole product, a fast and animated UI, flexible documents with built-in location search and transactions, one service to deploy on AWS in Sydney, and an API that native apps can reuse. | 1, 2, 13 |
+| What technology stack do you recommend and why? | React + Vite (TypeScript) for the website, Node.js + Express for the API, MongoDB Atlas for data. One language across the whole product, a fast and animated UI, flexible documents with built-in location search and transactions, and just two apps to deploy on AWS in Sydney, each on its own: the frontend as static files on a CDN and the backend as one container service. The same backend API serves the website now and native apps later. | 1, 2, 13 |
 | What payment provider will be used? | Stripe: NZD, cards, Apple Pay and Google Pay, Stripe Connect for Host payouts, Stripe Identity for verification, Radar for fraud screening. | 8 |
 | How will driver and identity verification be implemented? | Stripe Identity checks an ID document and a selfie. Guests are asked to use their driver licence as the ID document where Stripe Identity accepts it, so one check covers both, and the licence number read from it is matched with the one entered. The Guest enters licence number, version, class and expiry (or an overseas licence, with an IDP or approved translation if it is not in English), checked against the eligibility rules. Support staff review anything the automatic check cannot decide. Hosts complete identity verification in their Host application. If the client chooses, NZ licences are also checked automatically through an approved NZ licence-check provider (section 16, item 15). If a check needs manual review during checkout, the booking waits as a request until support decides (section 8.2). | 6, 8.2, 9 (Days 19–20), 16 |
 | How will vehicle data be verified? | Hosts enter rego, VIN (or the chassis number for imports that have no VIN), WOF and rego expiry, and upload registration, WOF and insurance documents. Support staff check the documents against the details before approving the listing, including that the Host is the registered owner or has the owner's written consent. New photos and documents on a live listing are checked before they appear, and a change to the rego, VIN, chassis number or vehicle details sends the listing back for review. Listings are hidden from search when the WOF or rego expires, and Hosts get reminders before that. CoF and Road User Charges details are recorded where they apply. Optionally, a plate-lookup service fills in the make, model, year and WOF and rego expiry from the plate and flags stolen cars (section 16, item 15). | 3, 4.3, 16 |
@@ -1382,10 +1442,10 @@ Rough figures at about NZD 1.70 per USD, Sydney prices, before GST, plus usage-b
 | How will cancellations and refunds work? | Cancellation tiers set by the client (e.g. Flexible, Moderate, Strict) with a short grace period. The system calculates the refund and cancellation fee and refunds the card through Stripe, fully or partly. If the Host cancels, the Guest is refunded in full, and any Host cancellation fee is deducted from the Host's next payout. Admins, and support staff with permission, can issue manual refunds. Every refund is logged, with who funds it. No-shows follow the same rules, and the Host receives their share of a kept Guest cancellation fee. | 5, 8 |
 | How will fraud prevention be handled? | Email, mobile, identity and licence verification; Stripe Radar and 3-D Secure; risk flags (booking velocity, failed payments, card country mismatch, repeated reports) reviewed by admins; listing moderation; two-factor sign-in for staff; audit logs. Advanced fraud detection is a later phase (roadmap 10.5, R12). | 14 |
 | What data will be stored and for how long? | Accounts, verification results, vehicles and documents, bookings, payments, messages, inspection photos, incidents, reviews and audit logs, all in MongoDB Atlas (Sydney) and Cloudinary; application logs in AWS CloudWatch (Sydney) for 30 days. Proposed retention: financial records and audit logs 7 years, ID images 90 days after verification, inspection photos, messages and incidents 2 years after the trip. To be confirmed by the client's legal adviser. Private files are served only through short-lived signed URLs. The Privacy Policy lists these providers and where they store data. | 3, 14 |
-| How will the platform scale from 100 to 10,000+ vehicles? | Indexed location search, a larger Atlas tier, more app tasks through ECS auto scaling, the job runner as its own service, read replicas for search and reports, and Atlas Search for heavy filtering, all without rebuilding. A load test with 10,000 synthetic vehicles is run before launch to confirm it. | 13, 9 (Day 26) |
+| How will the platform scale from 100 to 10,000+ vehicles? | Indexed location search, a larger Atlas tier, more backend tasks through ECS auto scaling (each task also runs jobs), read replicas for search and reports, and Atlas Search for heavy filtering, all without rebuilding. A load test with 10,000 synthetic vehicles is run before launch to confirm it. | 13, 9 (Day 26) |
 | What is included in the initial MVP? | All of the spec's Phase 1 (MVP) and most of Phase 2 (verification, inspections, damage reporting, advanced earnings and admin tools, refund and dispute workflows) in 30 days. The later items have a roadmap in section 10.5. | 10.3, 10.5 |
 | What third-party integrations are required? | Stripe (payments, Connect, Identity, Radar), Resend (email), Twilio (SMS), Cloudinary (images), Google Places (location search) and the Maps Static API (listing map), MongoDB Atlas (database), Sentry (errors), GA4 and Search Console (analytics and SEO), AWS (hosting: ECS Fargate, load balancer, CloudFront CDN and WAF, Route 53 DNS). Optional at launch: an NZ licence-check service and a plate-lookup service (section 16, item 15). Later: Web Push, the Google Maps JavaScript API for map search, and APNs and Firebase for app push (section 10.5). | 1.2, 10.5, 13 |
-| What ongoing hosting, maintenance and support costs should be expected? | About NZD $520–600 a month at launch for AWS hosting, MongoDB Atlas, email and monitoring (section 13.7), plus usage-based Stripe, SMS, Maps and Cloudinary fees. 30 days of bug-fix support are included after launch; ongoing maintenance and support after that is quoted separately. | 13 |
+| What ongoing hosting, maintenance and support costs should be expected? | About NZD $525–615 a month at launch for AWS hosting, MongoDB Atlas, email and monitoring (section 13.7), plus usage-based Stripe, SMS, Maps and Cloudinary fees. 30 days of bug-fix support are included after launch; ongoing maintenance and support after that is quoted separately. | 13 |
 
 ---
 
@@ -1468,7 +1528,7 @@ Every requirement in [project_requirements.md](project_requirements.md), bullet 
 | 11.1 | Guided multi-step form instead of one long page | 12.6 (Host onboarding); 9 Days 8–11 | Days 8–11 |
 | 11.2–11.11 | Step 1: registration number; make; model; year; variant; VIN/chassis where required; fuel type; transmission; seats; doors | 3 (`vehicles`, validation rules); 9 Days 8–11 | Days 8–11 |
 | 11.12–11.15 | Step 2: registration/vehicle documents; WOF information; insurance information; other documents the platform requires | 3 (`documents`, incl. the owner's consent; required documents in `platformSettings`); 9 Days 8–11 | Days 8–11 |
-| 11.16–11.18 | Step 3: minimum set of photos; clear instructions and example photos; low-quality or missing photos flagged for review | 3 (`photos.qualityFlag`); 9 Days 8–11; 12.6 | Days 8–11 |
+| 11.16–11.18 | Step 3: minimum set of photos; clear instructions and example photos; low-quality or missing photos flagged for review | 3 (`photos.qualityFlag`); 9 Days 8–11 (required angles block submission, other missing photos are flagged); 12.6; 16 item 17 | Days 8–11 |
 | 11.19–11.24 | Step 4: daily price; weekly discount; monthly discount; minimum rental period; maximum rental period; optional kilometre pricing | 3 (`pricing`, `rules`); 5; 9 Days 8–11 | Days 8–11 |
 | 11.25–11.28 | Step 5: availability calendar; blocked dates; minimum notice before booking; preparation time between bookings | 3 (`rules`, `availabilityBlocks`); 9 Days 8–11 | Days 8–11 |
 | 11.29–11.33 | Step 6: Host pickup location; delivery option; airport delivery; custom delivery locations; delivery fees | 3 (`deliveryOptions`); 9 Days 8–11 | Days 8–11 |
@@ -1503,7 +1563,7 @@ Every requirement in [project_requirements.md](project_requirements.md), bullet 
 | 17.1–17.2 | Major card payments; Apple Pay and Google Pay | 8.1 items 2, 17 | Days 11–13 |
 | 17.3 | All consumer-facing prices in NZD | 3 (Money), 5, 12.7 | Throughout |
 | 17.4 | Secure payment processing through a suitable provider | 1.2 (Stripe); 14 (PCI scope, 3-D Secure) | Days 11–13 |
-| 17.5–17.6 | Automatic platform fee calculation; Host payout calculation | 5 (incl. card processing fees, GST and Hosts); 8.1 items 20, 22 | Days 6–7, 10–12, 17–18 |
+| 17.5–17.6 | Automatic platform fee calculation; Host payout calculation | 5 (incl. card processing fees, GST and Hosts); 3 (`payouts.type`: trip, kept cancellation fee, extra charge); 8.1 items 11, 20, 22 | Days 6–7, 10–12, 17–18 |
 | 17.7–17.8 | Refund handling; partial refunds | 8.1 items 10, 15, 21 (failed refunds); 11 (`cancellation-preview`) | Days 13–14, 17–18 |
 | 17.9 | Cancellation fee handling | 5 (Guest cancellation fees); 8.1 items 10, 16; 8.2 (no-shows, request withdrawal, early return) | Days 13–14 |
 | 17.10 | Receipts and payment history | 8.1 items 7, 18 | Days 13–18 |
@@ -1534,13 +1594,13 @@ Every requirement in [project_requirements.md](project_requirements.md), bullet 
 | 20.7 | Easy camera/photo upload from phones | 12.3 (FileUpload/CameraCapture), 12.5, 12.6 (Inspection, uploads that wait for signal) | Days 8–11, 19–21 |
 | 20.8 | Fast checkout | 12.6 (Checkout), 6.1, 8.1 | Days 11–13 |
 | **§21** | **Search and location** | | |
-| 21.1–21.2 | Location autocomplete; city, suburb and popular destination search | 1.2 (Google Places and Place Details, and our own places); 3; 11 (`/places`); 9 Days 6–8 | Days 6–8 |
+| 21.1–21.2 | Location autocomplete; city, suburb and popular destination search | 1.2 (Google Places and Place Details, and our own places); 3 (`places`, `destinations`); 11 (`/places`); 9 Days 6–8 | Days 2–3 (place data), 6–8 |
 | 21.3 | Map-based vehicle browsing (future or optional) | 10.4, 10.5 R2 | Later |
 | 21.4 | Distance from the selected location | 3 (`$geoNear`) | Days 6–8 |
 | 21.5 | Airport search and delivery options | 3 (Airport search, `deliveryOptions`) | Days 6–11 |
 | 21.6 | NZ-focused address formatting | 3 (Addresses) | Days 2–3 |
 | **§22** | **Trust, safety and verification** | | |
-| 22.1–22.2 | Email verification; mobile verification | 6.1 | Days 3–5 |
+| 22.1–22.2 | Email verification; mobile verification | 6.1 (incl. email enforced at check-in); 12.6 (Checkout step 5: SMS code) | Days 3–5, 11–13 |
 | 22.3–22.5 | Identity verification; driver licence verification; Host identity verification | 1.2 (Stripe Identity); 9 Days 19–20; 16 item 15 | Days 19–20 |
 | 22.6 | Vehicle documentation verification | 3 (`documents`); 9 Days 8–11, 19–20 | Days 8–11, 19–20 |
 | 22.7 | Listing moderation | 3 (Changes to live listings); 9 Days 8–11 | Days 8–11 |
@@ -1564,12 +1624,12 @@ Every requirement in [project_requirements.md](project_requirements.md), bullet 
 | 24.1 | Search-engine-friendly vehicle and location pages | 1.4 | Days 26–27 |
 | 24.2 | Unique page titles and meta descriptions | 1.4 | Days 26–27 |
 | 24.3 | Structured data | 1.4 (JSON-LD) | Days 26–27 |
-| 24.4 | Indexable destination pages | 1.4 (`/rental/:city`, sitemap) | Days 26–27 |
+| 24.4 | Indexable destination pages | 1.4 (`/rental/:city`, sitemap); 9 Days 7–9 (pages built) | Days 7–9 (pages), 26–27 (SEO) |
 | 24.5 | Fast loading performance | 12.5 | Throughout, Day 26 |
 | 24.6 | Social sharing previews | 1.4 (Open Graph) | Days 26–27 |
 | 24.7–24.8 | Analytics integration; conversion tracking | 1.2 (GA4); 9 Days 26–27 | Days 26–27 |
 | 24.9 | Google Search Console or equivalent tooling | 1.2; 9 Days 26–27 | Days 26–27 |
-| 24.10 | Landing pages for major NZ cities and destinations | 1.4; 9 Days 26–27 (5 at launch, more added by admins) | Days 26–27 |
+| 24.10 | Landing pages for major NZ cities and destinations | 1.4; 9 Days 7–9 (pages built), 26–27 (SEO and content; 5 at launch, more added by admins) | Days 7–9, 26–27 |
 | **§25** | **Technical and performance** | | |
 | 25.1 | Responsive web application | 1.1, 12 | Throughout |
 | 25.2 | Secure HTTPS | 13 (ACM, CloudFront), 14 | Days 2–3, 27 |
@@ -1610,7 +1670,7 @@ Every requirement in [project_requirements.md](project_requirements.md), bullet 
 | 32.1 | A Guest goes from searching to a completed booking with minimal friction | 12.5, 12.6 (Checkout); 9 Day 25 | Throughout |
 | 32.2 | A Host lists, manages, rents and earns from their vehicle through a simple dashboard | 9 Days 8–11, 16–19; 12.6 | Throughout |
 
-**Result of the cross-check:** every requirement above has a place in the plan. All are built in the 30 days except push notifications (13.8 in part, 19.4), map-based browsing (21.3, 27.20), advanced analytics (27.21), the spec's Phase 3 items (27.22–27.30) and the native apps themselves (26.1–26.8, whose architecture ships at launch). MILESTONES.md excludes these, and section 10.5 plans them. Items that need a client or adviser decision before they are final are listed in section 16.
+**Result of the cross-check:** every requirement above has a place in the plan. All are built in the 30 days except push notifications (13.8 in part, 19.4), map-based browsing (21.3, 27.20), advanced analytics (27.21), the spec's Phase 3 items (27.22–27.30) and the native apps themselves (26.1–26.8, whose architecture ships at launch). MILESTONES.md excludes these, except airport automation and API integrations, which it does not name (section 10.4, section 16 item 17). Section 10.5 plans them all. Items that need a client or adviser decision before they are final are listed in section 16.
 
 **Second cross-check (25/09/2026):** each spec section was checked again, this time against the depth of the plan (data model, indexes, validation rules, API, jobs, notifications, payments, edge cases, compliance, schedule and dependencies), not just against its headings. Every bullet was already traced. The gaps found were below the bullet level, and each is now covered in the section named:
 - **Build order:** the booking request reached Hosts in-app and by SMS on Days 11–13, but those channels were only built on Days 21–22 (section 7 build order; section 9 Days 11–13).
@@ -1620,3 +1680,4 @@ Every requirement in [project_requirements.md](project_requirements.md), bullet 
 - **Validation and edge cases:** search, inspection, review, incident and extra-charge rules, and the registered-owner check; withdrawing a request, early returns, documents that expire before a booked trip, Host payout accounts that Stripe disables, and failed refunds (sections 3, 8.1 and 8.2).
 - **NZ and security:** GST-registered Hosts and commission invoices, the Unsolicited Electronic Messages Act, the Fair Trading Act, where the Privacy Policy says data is stored, SMS quiet hours, masked contact details in messages, CSRF protection, append-only audit trails, duplicate-licence risk flags, an external uptime check, and a load test at 10,000 vehicles (sections 5, 7, 8.1, 13, 14; section 9 Day 26).
 - **Client inputs:** processing fees, per-listing cancellation tiers, early-return refunds, VIN or chassis "where required", the roadside assistance number, page copy and estimator assumptions, and languages (section 16, items 2, 3, 9, 13, 18 and 19).
+- **Found by an independent re-read of the updated plan:** condition-report photos now record who took them and when they reached the server (spec §14), and reviews carry the car so listings can show them; our own city, suburb and airport list is a `places` collection; the Host's share of extra charges is paid as its own payout after the trip's payout, and a cancellation no longer cancels the payout of a kept fee; the date hold starts once the Guest is signed in; mobile verification is an explicit checkout step, and email verification is enforced at check-in; staff two-factor sign-in and the city landing pages are built before they are first used; GST is stored for each line item, and the formula is marked provisional; recurring rules skip existing bookings; review moderation has its own state, so the reveal job cannot publish a held review; missing photos are flagged, as spec §11 asks; and airport automation and API integrations are recorded as missing from MILESTONES.md's exclusions (sections 3, 4, 5, 6.1, 8, 9, 10.4, 12.6 and 16 item 17).

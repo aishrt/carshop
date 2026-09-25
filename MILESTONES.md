@@ -1,7 +1,8 @@
-# NZ Peer-to-Peer Car Rental Marketplace: Project Milestones
+# Rento Vroom: Project Milestones
 
 **Prepared:** September 2026
-**Technology:** React website · Node.js API · MongoDB database · Hosting on AWS (Sydney)
+**Website:** Rento Vroom, an NZ peer-to-peer car rental marketplace
+**Technology:** two separate apps, each deployed on its own: a React website (frontend) and a Node.js API (backend) · MongoDB database · Hosting on AWS (Sydney)
 **Total duration:** 30 days
 
 ---
@@ -24,7 +25,7 @@
 - Create a professional, luxurious brand look and feel: colours, fonts, photography and animation style.
 - Design the key pages for mobile and desktop: Home, Search, Vehicle listing, Checkout and Host dashboard.
 - Build a clickable prototype of the key animations (homepage, opening a car, search filters and checkout), so you can see how the site moves before we build it.
-- Set up the code, the database, and the staging (test) environment.
+- Set up the two apps (frontend and backend), the database, and the staging (test) environment.
 - Build account sign-up, login, email verification and password reset, with emails sent.
 
 **You will receive**
@@ -103,7 +104,7 @@
 
 ## To deliver in 30 days, we need from you
 
-- **By Day 1:** business name, logo and domain name (with access to its DNS settings), plus decisions on fees, cancellation policy and security deposits
+- **By Day 1:** logo and domain name for Rento Vroom (with access to its DNS settings), plus decisions on fees, cancellation policy and security deposits
 - **By Day 2:** accounts for hosting (AWS), the payment provider (Stripe), email and SMS services (we will guide you through setting them up)
 - **By Day 15:** insurance and protection details from your insurance partner
 - **By Day 24:** legal text (Terms, Privacy, Host and Guest Agreements), reviewed by your legal adviser
