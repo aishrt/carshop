@@ -1,7 +1,7 @@
 # NZ Peer-to-Peer Car Rental Marketplace: Project Milestones
 
 **Prepared:** September 2026
-**Technology:** React website · Node.js API · MongoDB database · Cloud hosting
+**Technology:** React website · Node.js API · MongoDB database · Hosting on AWS (Sydney)
 **Total duration:** 30 days
 
 ---
@@ -103,8 +103,8 @@
 
 ## To deliver in 30 days, we need from you
 
-- **By Day 1:** business name, logo and domain name, plus decisions on fees, cancellation policy and security deposits
-- **By Day 2:** accounts for the payment provider (Stripe), email and SMS services (we will guide you through setting them up)
+- **By Day 1:** business name, logo and domain name (with access to its DNS settings), plus decisions on fees, cancellation policy and security deposits
+- **By Day 2:** accounts for hosting (AWS), the payment provider (Stripe), email and SMS services (we will guide you through setting them up)
 - **By Day 15:** insurance and protection details from your insurance partner
 - **By Day 24:** legal text (Terms, Privacy, Host and Guest Agreements), reviewed by your legal adviser
 - **Feedback within 24 hours** at each review point. Any delay moves the launch date by the same number of days.
